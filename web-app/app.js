@@ -534,26 +534,28 @@ async function testApiConnection(provider) {
 }
 
 /**
- * 获取指定对话的工作流状态
+ * 获取指定对话的工作流状态（从活跃工作流初始化）
  */
 function getWorkflowState(chatId) {
     if (!WorkflowStateMap.has(chatId)) {
+        const activeWorkflow = getActiveWorkflow();
+        const steps = activeWorkflow ? activeWorkflow.steps.map(s => ({
+            id: s.stepType,
+            name: WORKFLOW_STEP_TYPES[s.stepType]?.name || s.stepType,
+            status: 'pending'
+        })) : [];
         WorkflowStateMap.set(chatId, {
             isRunning: false,
             currentStep: null,
-            steps: [
-                { id: 'intent', name: '意图识别', status: 'pending' },
-                { id: 'image', name: '图片识别', status: 'pending' },
-                { id: 'search', name: '联网搜索', status: 'pending' },
-                { id: 'generate', name: '生成图片', status: 'pending' },
-                { id: 'answer', name: '生成回答', status: 'pending' }
-            ],
+            steps: steps,
             results: {
                 intent: null,
                 imageDescription: null,
                 searchResults: null,
+                searchLinks: [],
                 generatedImage: null,
-                finalAnswer: null
+                finalAnswer: null,
+                disabledSteps: []
             }
         });
     }
@@ -565,13 +567,25 @@ function getWorkflowState(chatId) {
  */
 function resetWorkflowState(chatId) {
     const state = getWorkflowState(chatId);
-    state.steps.forEach(step => step.status = 'pending');
+    // 从活跃工作流重新初始化步骤列表
+    const activeWorkflow = getActiveWorkflow();
+    if (activeWorkflow) {
+        state.steps = activeWorkflow.steps.map(s => ({
+            id: s.stepType,
+            name: WORKFLOW_STEP_TYPES[s.stepType]?.name || s.stepType,
+            status: 'pending'
+        }));
+    } else {
+        state.steps.forEach(step => step.status = 'pending');
+    }
     state.results = {
         intent: null,
         imageDescription: null,
         searchResults: null,
+        searchLinks: [],
         generatedImage: null,
-        finalAnswer: null
+        finalAnswer: null,
+        disabledSteps: []
     };
 }
 
@@ -653,6 +667,7 @@ async function initApp() {
 
     loadTheme(); // 加载主题设置
     loadSettings();
+    migrateOldWorkflowConfig(); // 迁移旧版工作流配置
     loadWorkflowSettings();
     loadChatHistory();
     // 预加载已保存的生成图片到内存缓存
@@ -711,13 +726,21 @@ function loadSettings() {
 }
 
 /**
- * 加载工作流设置
+ * 加载工作流设置（新系统：从多工作流存储中加载活跃工作流）
  */
 function loadWorkflowSettings() {
-    const savedConfig = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'workflow_config');
-    if (savedConfig) {
-        AppState.workflowConfig = savedConfig;
-        applyWorkflowConfig(savedConfig);
+    const activeWorkflow = getActiveWorkflow();
+    if (activeWorkflow) {
+        AppState.workflowConfig = {
+            steps: {}
+        };
+        activeWorkflow.steps.forEach(s => {
+            AppState.workflowConfig.steps[s.stepType] = { enabled: s.enabled, ...s.config };
+        });
+        AppState.workflowStepsEnabled = {};
+        activeWorkflow.steps.forEach(s => {
+            AppState.workflowStepsEnabled[s.stepType] = s.enabled;
+        });
     } else {
         AppState.workflowConfig = getDefaultWorkflowConfig();
     }
@@ -881,11 +904,17 @@ function bindEventListeners() {
     document.getElementById('closeWorkflowManagerBtn')?.addEventListener('click', () => {
         closeWorkflowManager();
     });
-    document.getElementById('saveWorkflowBtn')?.addEventListener('click', () => {
-        saveWorkflowConfig();
+    document.getElementById('createWorkflowBtn')?.addEventListener('click', () => {
+        showWorkflowEditorView(null);
     });
-    document.getElementById('resetWorkflowBtn')?.addEventListener('click', () => {
-        resetWorkflowConfig();
+    document.getElementById('backToListBtn')?.addEventListener('click', () => {
+        showWorkflowListView();
+    });
+    document.getElementById('cancelEditBtn')?.addEventListener('click', () => {
+        showWorkflowListView();
+    });
+    document.getElementById('saveWorkflowBtn')?.addEventListener('click', () => {
+        saveWorkflowEditor();
     });
 
     // 关闭侧边栏
@@ -1087,23 +1116,29 @@ async function handleSendMessage() {
 }
 
 /**
- * 执行完整的工作流
+ * 执行完整的工作流（数据驱动版本）
  * @param {string} userInput - 用户输入的文本
  * @param {boolean} hasImage - 是否有图片
  * @param {string} chatId - 对话ID
- * @param {string|null} imageData - 图片base64数据（在清除前已保存）
+ * @param {string|null} imageData - 图片base64数据
  */
 async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
+    const activeWorkflow = getActiveWorkflow();
+    if (!activeWorkflow || activeWorkflow.steps.length === 0) {
+        console.log('[Workflow] 没有可用的工作流，直接回答');
+        await generateDirectAnswer(userInput, chatId);
+        return;
+    }
+
     const workflowState = getWorkflowState(chatId);
     workflowState.isRunning = true;
     resetWorkflowState(chatId);
     updateWorkflowUI('start', null, chatId);
 
-    // 获取对话消息数组
     const chatMessages = AppState.chatHistory[chatId]?.messages || AppState.messages;
     const isCurrentChat = chatId === AppState.currentChatId;
 
-    // 添加"内容正在生成中"的加载消息
+    // 添加加载消息
     const loadingMessage = {
         role: 'assistant',
         content: '内容正在生成中',
@@ -1116,223 +1151,283 @@ async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
         scrollToBottom();
     }
 
+    workflowState.results.disabledSteps = [];
+
+    // 拓扑排序：基于 connections 确定执行顺序
+    const steps = activeWorkflow.steps;
+    const connections = activeWorkflow.connections || [];
+    const stepCount = steps.length;
+
+    // 计算入度
+    const inDegree = new Array(stepCount).fill(0);
+    const successors = new Array(stepCount).fill(null).map(() => []);
+    connections.forEach(conn => {
+        if (conn.from < stepCount && conn.to < stepCount) {
+            inDegree[conn.to]++;
+            successors[conn.from].push(conn.to);
+        }
+    });
+
+    // 如果没有连线，使用默认的顺序连线
+    if (connections.length === 0 && stepCount > 1) {
+        for (let i = 0; i < stepCount - 1; i++) {
+            successors[i].push(i + 1);
+            inDegree[i + 1]++;
+        }
+    }
+
+    // 已执行完成的步骤集合
+    const completed = new Set();
+    // 跳过的步骤集合（跳过也算"完成"，让后续步骤可以执行）
+    const skipped = new Set();
+
+    const context = { userInput, hasImage, imageData, chatId, chatMessages, isCurrentChat };
+
     try {
-        // 步骤1：意图识别
-        // 检查是否有可用的意图识别模型
-        const availableIntentModels = getAvailableModels('intent');
-        if (availableIntentModels.length === 0) {
-            console.log('[Workflow] 没有可用的意图识别模型Key，跳过');
-            workflowState.results.disabledSteps = workflowState.results.disabledSteps || [];
-            workflowState.results.disabledSteps.push('意图识别');
-            workflowState.results.intent = {
-                intent: 'question',
-                needSearch: false,
-                needImageGeneration: false,
-                imagePrompt: '',
-                keywords: [],
-                summary: userInput
-            };
-            updateWorkflowUI('intent', 'skipped', chatId);
-        } else {
-            // 动态选择可用的模型
-            const intentConfig = WORKFLOW_MODELS.intentAnalysis;
-            const configuredModel = intentConfig.model;
-            const selectedModel = availableIntentModels.find(m => m.value === configuredModel) || availableIntentModels[0];
+        // 拓扑排序执行
+        let iterations = 0;
+        const maxIterations = stepCount * 2; // 防止无限循环
 
-            // 临时更新配置使用的模型
-            const originalModel = intentConfig.model;
-            const originalProvider = intentConfig.provider;
-            intentConfig.model = selectedModel.value;
-            intentConfig.provider = selectedModel.provider;
+        while (completed.size + skipped.size < stepCount && iterations < maxIterations) {
+            iterations++;
 
-            updateWorkflowUI('intent', 'running', chatId);
-            try {
-                const intentResult = await analyzeIntentWithDeepSeek(userInput);
-                console.log('[Workflow] 意图识别结果:', intentResult);
-                workflowState.results.intent = intentResult;
-                updateWorkflowUI('intent', 'done', chatId);
-            } catch (error) {
-                console.error('[Workflow] 意图识别失败:', error);
-                // 使用默认意图
-                workflowState.results.intent = {
-                    intent: 'question',
-                    needSearch: false,
-                    needImageGeneration: false,
-                    imagePrompt: '',
-                    keywords: [],
-                    summary: userInput
-                };
-                updateWorkflowUI('intent', 'done', chatId);
+            // 找到所有入度为 0 且未执行的步骤
+            const ready = [];
+            for (let i = 0; i < stepCount; i++) {
+                if (!completed.has(i) && !skipped.has(i) && inDegree[i] === 0) {
+                    ready.push(i);
+                }
             }
 
-            // 恢复原始配置
-            intentConfig.model = originalModel;
-            intentConfig.provider = originalProvider;
-        }
+            if (ready.length === 0) {
+                console.warn('[Workflow] 存在循环依赖或无法执行的步骤');
+                break;
+            }
 
-        // 记录关闭的步骤
-        workflowState.results.disabledSteps = workflowState.results.disabledSteps || [];
+            // 并行执行所有就绪的步骤
+            await Promise.all(ready.map(async (stepIndex) => {
+                const step = steps[stepIndex];
+                const stepType = step.stepType;
+                const stepTypeDef = WORKFLOW_STEP_TYPES[stepType];
 
-        // 步骤2：图片识别（如果有图片）
-        const imageStepEnabled = AppState.workflowStepsEnabled?.image !== false && hasApiKey('mimo');
-        if (hasImage && imageData) {
-            if (!imageStepEnabled) {
-                // 图片识别已禁用或Key未配置，记录到关闭步骤
-                if (!hasApiKey('mimo')) {
-                    workflowState.results.disabledSteps.push('图片识别（MiMo Key未配置）');
-                } else {
-                    workflowState.results.disabledSteps.push('图片识别');
+                if (!stepTypeDef) {
+                    console.warn(`[Workflow] 未知步骤类型: ${stepType}，跳过`);
+                    skipped.add(stepIndex);
+                    return;
                 }
-                updateWorkflowUI('image', 'skipped', chatId);
-            } else {
-                updateWorkflowUI('image', 'running', chatId);
+
+                // 检查步骤是否启用
+                if (!step.enabled) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    workflowState.results.disabledSteps.push(stepTypeDef.name);
+                    skipped.add(stepIndex);
+                    return;
+                }
+
+                // 检查模型是否有效
+                if (!step.config.model || !MODEL_CONFIG.providers[step.config.model]) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    workflowState.results.disabledSteps.push(`${stepTypeDef.name}（模型配置无效）`);
+                    skipped.add(stepIndex);
+                    return;
+                }
+
+                // 检查 API Key 可用性
+                const provider = MODEL_CONFIG.providers[step.config.model];
+                if (!hasApiKey(provider)) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    workflowState.results.disabledSteps.push(`${stepTypeDef.name}（${provider} Key未配置）`);
+                    skipped.add(stepIndex);
+                    return;
+                }
+
+                // 特殊条件检查
+                if (stepType === 'image' && (!hasImage || !imageData)) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    skipped.add(stepIndex);
+                    return;
+                }
+                if (stepType === 'search' && workflowState.results.intent && !workflowState.results.intent.needSearch) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    skipped.add(stepIndex);
+                    return;
+                }
+                if (stepType === 'generate' && workflowState.results.intent && !workflowState.results.intent.needImageGeneration) {
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    skipped.add(stepIndex);
+                    return;
+                }
+
+                // 执行步骤
+                updateWorkflowUI(stepType, 'running', chatId);
                 try {
-                    const imageDescription = await recognizeImageWithMiMo(imageData);
-                    workflowState.results.imageDescription = imageDescription;
-                    updateWorkflowUI('image', 'done', chatId);
+                    await executeStepHandler(stepType, step.config, workflowState, context);
+                    updateWorkflowUI(stepType, 'done', chatId);
+                    completed.add(stepIndex);
                 } catch (error) {
-                    console.error('[Workflow] 图片识别失败:', error);
-                    workflowState.results.imageDescription = null;
-                    updateWorkflowUI('image', 'skipped', chatId);
+                    console.error(`[Workflow] 步骤 ${stepType} 失败:`, error);
+                    updateWorkflowUI(stepType, 'skipped', chatId);
+                    skipped.add(stepIndex);
                 }
+            }));
+
+            // 更新入度：已执行/跳过的步骤的后继节点入度减 1
+            for (const idx of [...completed, ...skipped]) {
+                successors[idx].forEach(succ => {
+                    inDegree[succ]--;
+                });
             }
-        } else {
-            updateWorkflowUI('image', 'skipped', chatId);
         }
 
-        // 步骤3：联网搜索（如果需要）
-        const searchStepEnabled = AppState.workflowStepsEnabled?.search !== false && hasApiKey('mimo');
-        const needSearch = workflowState.results.intent?.needSearch || false;
-        if (needSearch) {
-            if (!searchStepEnabled) {
-                // 联网搜索已禁用或Key未配置，记录到关闭步骤
-                if (!hasApiKey('mimo')) {
-                    workflowState.results.disabledSteps.push('联网搜索（MiMo Key未配置）');
-                } else {
-                    workflowState.results.disabledSteps.push('联网搜索');
-                }
-                workflowState.results.searchResults = null;
-                workflowState.results.searchLinks = [];
-                updateWorkflowUI('search', 'skipped', chatId);
-            } else {
-                updateWorkflowUI('search', 'running', chatId);
-                try {
-                    const keywords = workflowState.results.intent?.keywords || [];
-                    const searchData = await searchWithMiMoPro(keywords);
-                    workflowState.results.searchResults = searchData.content;
-                    workflowState.results.searchLinks = searchData.searchResults;
-                    updateWorkflowUI('search', 'done', chatId);
-                } catch (error) {
-                    console.error('[Workflow] 联网搜索失败:', error);
-                    workflowState.results.searchResults = null;
-                    workflowState.results.searchLinks = [];
-                    updateWorkflowUI('search', 'skipped', chatId);
-                }
+        // 图片生成成功后直接返回
+        if (workflowState.results.generatedImage) {
+            const loadingIdx = chatMessages.findIndex(m => m.isLoading);
+            if (loadingIdx !== -1) chatMessages.splice(loadingIdx, 1);
+            if (isCurrentChat) renderChatMessages();
+            if (AppState.chatHistory[chatId]) {
+                AppState.chatHistory[chatId].updatedAt = new Date().toISOString();
+                saveChatHistory();
             }
-        } else {
-            updateWorkflowUI('search', 'skipped', chatId);
-        }
-
-        // 步骤4：生成图片（如果需要）
-        const generateStepEnabled = AppState.workflowStepsEnabled?.generate !== false && hasApiKey('image');
-        const needImageGeneration = workflowState.results.intent?.needImageGeneration || false;
-        console.log('[Workflow] 是否需要生成图片:', needImageGeneration);
-        if (needImageGeneration) {
-            if (!generateStepEnabled) {
-                // 图片生成已禁用或Key未配置，记录到关闭步骤
-                if (!hasApiKey('image')) {
-                    workflowState.results.disabledSteps.push('图片生成（Image Key未配置）');
-                } else {
-                    workflowState.results.disabledSteps.push('图片生成');
-                }
-                workflowState.results.generatedImage = null;
-                updateWorkflowUI('generate', 'skipped', chatId);
-            } else {
-                updateWorkflowUI('generate', 'running', chatId);
-                try {
-                    const imagePrompt = workflowState.results.intent?.imagePrompt || userInput;
-                    console.log('[Workflow] 图片生成提示词:', imagePrompt);
-                    const generatedImage = await generateImageWithGPT(imagePrompt, chatId);
-                    workflowState.results.generatedImage = generatedImage;
-                    updateWorkflowUI('generate', 'done', chatId);
-
-                    // 移除加载消息，图片消息已添加
-                    const loadingIdx = chatMessages.findIndex(m => m.isLoading);
-                    if (loadingIdx !== -1) {
-                        chatMessages.splice(loadingIdx, 1);
-                    }
-                    if (isCurrentChat) {
-                        renderChatMessages();
-                    }
-
-                    // 保存聊天历史
-                    if (AppState.chatHistory[chatId]) {
-                        AppState.chatHistory[chatId].updatedAt = new Date().toISOString();
-                        saveChatHistory();
-                    }
-
-                    updateWorkflowUI('answer', 'done', chatId);
-                    workflowState.isRunning = false;
-                    return; // 图片生成完成，直接返回
-                } catch (error) {
-                    console.error('[Workflow] 图片生成失败:', error);
-                    workflowState.results.generatedImage = null;
-                    updateWorkflowUI('generate', 'skipped', chatId);
-                }
-            }
-        } else {
-            updateWorkflowUI('generate', 'skipped', chatId);
-        }
-
-        // 步骤5：生成最终回答
-        // 检查是否有可用的回答模型
-        const availableAnswerModels = getAvailableModels('answer');
-        if (availableAnswerModels.length === 0) {
-            console.log('[Workflow] 没有可用的回答模型Key，跳过');
-            workflowState.results.disabledSteps.push('生成回答');
-            chatMessages[chatMessages.length - 1].content = '无法生成回答：未配置任何可用的API Key';
-            chatMessages[chatMessages.length - 1].isLoading = false;
-            if (isCurrentChat) {
-                renderChatMessages();
-            }
-            updateWorkflowUI('answer', 'skipped', chatId);
-        } else {
-            // 动态选择可用的模型（优先使用配置的模型，不可用时使用第一个可用的）
-            const answerConfig = WORKFLOW_MODELS.finalAnswer;
-            const configuredModel = answerConfig.model;
-            const selectedModel = availableAnswerModels.find(m => m.value === configuredModel) || availableAnswerModels[0];
-
-            // 临时更新配置使用的模型
-            const originalModel = answerConfig.model;
-            const originalProvider = answerConfig.provider;
-            answerConfig.model = selectedModel.value;
-            answerConfig.provider = selectedModel.provider;
-
-            updateWorkflowUI('answer', 'running', chatId);
-            await generateFinalAnswer(userInput, chatId);
-            updateWorkflowUI('answer', 'done', chatId);
-
-            // 恢复原始配置
-            answerConfig.model = originalModel;
-            answerConfig.provider = originalProvider;
+            workflowState.isRunning = false;
+            updateWorkflowUI('complete', null, chatId);
+            return;
         }
 
     } catch (error) {
         console.error('[Workflow] 工作流执行失败:', error);
-        // 最终降级：直接使用DeepSeek回答
         if (hasApiKey('deepseek')) {
             await generateDirectAnswer(userInput, chatId);
-        } else if (hasApiKey('mimo')) {
-            // 如果只有MiMo Key，使用MiMo回答
-            chatMessages[chatMessages.length - 1].content = '工作流执行失败，且未配置DeepSeek Key进行降级回答';
-            chatMessages[chatMessages.length - 1].isLoading = false;
-            if (isCurrentChat) {
-                renderChatMessages();
+        } else {
+            const lastMsg = chatMessages[chatMessages.length - 1];
+            if (lastMsg) {
+                lastMsg.content = '工作流执行失败';
+                lastMsg.isLoading = false;
             }
+            if (isCurrentChat) renderChatMessages();
         }
     } finally {
         workflowState.isRunning = false;
         updateWorkflowUI('complete', null, chatId);
+    }
+}
+
+/**
+ * 步骤处理函数注册表
+ */
+const STEP_HANDLERS = {
+    intent: executeIntentStep,
+    image: executeImageStep,
+    search: executeSearchStep,
+    generate: executeGenerateStep,
+    answer: executeAnswerStep
+};
+
+/**
+ * 执行单个步骤处理函数
+ */
+async function executeStepHandler(stepType, stepConfig, workflowState, context) {
+    const handler = STEP_HANDLERS[stepType];
+    if (!handler) throw new Error(`No handler for step type: ${stepType}`);
+    await handler(stepConfig, workflowState, context);
+}
+
+/**
+ * 意图识别步骤处理
+ */
+async function executeIntentStep(stepConfig, workflowState, context) {
+    // 临时替换全局配置
+    const origModels = { ...WORKFLOW_MODELS.intentAnalysis };
+    WORKFLOW_MODELS.intentAnalysis.model = stepConfig.model;
+    WORKFLOW_MODELS.intentAnalysis.provider = MODEL_CONFIG.providers[stepConfig.model] || 'deepseek';
+    WORKFLOW_MODELS.intentAnalysis.thinking = stepConfig.thinking || false;
+    WORKFLOW_MODELS.intentAnalysis.reasoningEffort = stepConfig.reasoningEffort;
+    WORKFLOW_MODELS.intentAnalysis.maxTokens = stepConfig.maxTokens;
+
+    try {
+        const result = await analyzeIntentWithDeepSeek(context.userInput);
+        console.log('[Workflow] 意图识别结果:', result);
+        workflowState.results.intent = result;
+    } catch (error) {
+        console.error('[Workflow] 意图识别失败:', error);
+        workflowState.results.intent = {
+            intent: 'question', needSearch: false, needImageGeneration: false,
+            imagePrompt: '', keywords: [], summary: context.userInput
+        };
+    } finally {
+        Object.assign(WORKFLOW_MODELS.intentAnalysis, origModels);
+    }
+}
+
+/**
+ * 图片识别步骤处理
+ */
+async function executeImageStep(stepConfig, workflowState, context) {
+    const origModels = { ...WORKFLOW_MODELS.imageRecognition };
+    WORKFLOW_MODELS.imageRecognition.model = stepConfig.model;
+    WORKFLOW_MODELS.imageRecognition.maxTokens = stepConfig.maxTokens;
+
+    try {
+        const result = await recognizeImageWithMiMo(context.imageData);
+        workflowState.results.imageDescription = result;
+    } catch (error) {
+        console.error('[Workflow] 图片识别失败:', error);
+        workflowState.results.imageDescription = null;
+    } finally {
+        Object.assign(WORKFLOW_MODELS.imageRecognition, origModels);
+    }
+}
+
+/**
+ * 联网搜索步骤处理
+ */
+async function executeSearchStep(stepConfig, workflowState, context) {
+    const origModels = { ...WORKFLOW_MODELS.webSearch };
+    WORKFLOW_MODELS.webSearch.model = stepConfig.model;
+    WORKFLOW_MODELS.webSearch.maxTokens = stepConfig.maxTokens;
+
+    try {
+        const keywords = workflowState.results.intent?.keywords || [];
+        const searchData = await searchWithMiMoPro(keywords);
+        workflowState.results.searchResults = searchData.content;
+        workflowState.results.searchLinks = searchData.searchResults;
+    } catch (error) {
+        console.error('[Workflow] 联网搜索失败:', error);
+        workflowState.results.searchResults = null;
+        workflowState.results.searchLinks = [];
+    } finally {
+        Object.assign(WORKFLOW_MODELS.webSearch, origModels);
+    }
+}
+
+/**
+ * 图片生成步骤处理
+ */
+async function executeGenerateStep(stepConfig, workflowState, context) {
+    try {
+        const imagePrompt = workflowState.results.intent?.imagePrompt || context.userInput;
+        console.log('[Workflow] 图片生成提示词:', imagePrompt);
+        const result = await generateImageWithGPT(imagePrompt, context.chatId);
+        workflowState.results.generatedImage = result;
+    } catch (error) {
+        console.error('[Workflow] 图片生成失败:', error);
+        workflowState.results.generatedImage = null;
+    }
+}
+
+/**
+ * 大模型输出步骤处理
+ */
+async function executeAnswerStep(stepConfig, workflowState, context) {
+    const origModels = { ...WORKFLOW_MODELS.finalAnswer };
+    WORKFLOW_MODELS.finalAnswer.model = stepConfig.model;
+    WORKFLOW_MODELS.finalAnswer.provider = MODEL_CONFIG.providers[stepConfig.model] || 'deepseek';
+    WORKFLOW_MODELS.finalAnswer.thinking = stepConfig.thinking !== false;
+    WORKFLOW_MODELS.finalAnswer.reasoningEffort = stepConfig.reasoningEffort;
+
+    try {
+        await generateFinalAnswer(context.userInput, context.chatId);
+    } finally {
+        Object.assign(WORKFLOW_MODELS.finalAnswer, origModels);
     }
 }
 
@@ -2202,13 +2297,12 @@ async function streamResponse(requestBody, config, chatId, searchLinks = []) {
 }
 
 /**
- * 更新工作流状态UI
+ * 更新工作流状态UI（动态版本，从活跃工作流读取信息）
  */
 function updateWorkflowUI(step, status, chatId) {
-    // 获取当前对话的工作流状态（始终更新状态，即使不是当前对话）
     const workflowState = chatId ? getWorkflowState(chatId) : null;
 
-    // 更新步骤状态（必须更新，这样切换回来时才能获取正确状态）
+    // 更新步骤状态
     if (workflowState) {
         const stepIndex = workflowState.steps.findIndex(s => s.id === step);
         if (stepIndex >= 0) {
@@ -2226,7 +2320,6 @@ function updateWorkflowUI(step, status, chatId) {
 
     if (!statusEl) return;
 
-    // 显示状态栏
     statusEl.style.display = 'flex';
 
     // 更新进度条
@@ -2238,41 +2331,39 @@ function updateWorkflowUI(step, status, chatId) {
         progressEl.style.width = `${progress}%`;
     }
 
-    // 步骤和模型映射
-    const stepConfig = {
-        'intent': { name: '识别意图', model: 'DeepSeek V4 Flash' },
-        'image': { name: '识别图片', model: 'MiMo v2.5' },
-        'search': { name: '搜索信息', model: 'MiMo v2.5 Pro' },
-        'generate': { name: '生成图片', model: 'GPT-Image-2' },
-        'answer': { name: '生成回答', model: 'DeepSeek V4 Flash' }
-    };
+    // 从活跃工作流获取步骤信息
+    const activeWorkflow = getActiveWorkflow();
+    const stepDef = activeWorkflow?.steps.find(s => s.stepType === step);
+    const stepTypeName = WORKFLOW_STEP_TYPES[step]?.name || step;
+    const modelDisplay = stepDef ? (MODEL_CONFIG.displayNames[stepDef.config.model] || stepDef.config.model) : '';
 
-    if (step === 'complete') {
+    if (step === 'start') {
+        stepEl.innerHTML = `
+            <span class="step-icon">🔄</span>
+            <span class="step-text">准备中...</span>
+        `;
+        modelEl.textContent = '';
+    } else if (step === 'complete') {
         stepEl.innerHTML = `
             <span class="step-icon">✅</span>
             <span class="step-text">回答完成</span>
         `;
         modelEl.textContent = '';
-        // 3秒后隐藏状态栏
         setTimeout(() => {
             statusEl.style.display = 'none';
         }, 3000);
     } else {
-        const config = stepConfig[step];
-        if (!config) return;
-
         const icon = status === 'running' ? '🔄' : status === 'done' ? '✅' : '⏭️';
-        const statusText = status === 'skipped' ? '已跳过' : `正在${config.name}...`;
+        const statusText = status === 'skipped' ? '已跳过' : `正在${stepTypeName}...`;
 
         stepEl.innerHTML = `
             <span class="step-icon">${icon}</span>
             <span class="step-text">${statusText}</span>
         `;
 
-        // 显示模型名称
         if (status === 'running') {
-            modelEl.textContent = config.model;
-        } else if (status === 'done' || status === 'skipped') {
+            modelEl.textContent = modelDisplay;
+        } else {
             modelEl.textContent = '';
         }
     }
@@ -3605,21 +3696,15 @@ function updateWorkflowUIForChat(chatId) {
     if (runningStep) {
         // 只在步骤变化时更新文本（避免频繁DOM操作）
         if (runningStep.id !== _lastSyncedStepId) {
-            const stepConfig = {
-                'intent': { name: '识别意图', model: 'DeepSeek V4 Flash' },
-                'image': { name: '识别图片', model: 'MiMo v2.5' },
-                'search': { name: '搜索信息', model: 'MiMo v2.5 Pro' },
-                'generate': { name: '生成图片', model: 'GPT-Image-2' },
-                'answer': { name: '生成回答', model: 'DeepSeek V4 Flash' }
-            };
-            const config = stepConfig[runningStep.id];
-            if (config) {
-                stepEl.innerHTML = `
-                    <span class="step-icon">🔄</span>
-                    <span class="step-text">正在${config.name}...</span>
-                `;
-                modelEl.textContent = config.model;
-            }
+            const activeWorkflow = getActiveWorkflow();
+            const stepDef = activeWorkflow?.steps.find(s => s.stepType === runningStep.id);
+            const stepTypeName = WORKFLOW_STEP_TYPES[runningStep.id]?.name || runningStep.id;
+            const modelDisplay = stepDef ? (MODEL_CONFIG.displayNames[stepDef.config.model] || stepDef.config.model) : '';
+            stepEl.innerHTML = `
+                <span class="step-icon">🔄</span>
+                <span class="step-text">正在${stepTypeName}...</span>
+            `;
+            modelEl.textContent = modelDisplay;
             _lastSyncedStepId = runningStep.id;
         }
     } else if (_lastSyncedStepId !== 'init') {
@@ -4245,7 +4330,7 @@ function toggleWorkflowManager() {
         workflowManager.style.display = 'flex';
         chatContainer.style.display = 'none';
         inputArea.style.display = 'none';
-        loadWorkflowConfig();
+        showWorkflowListView();
         closeSidebar();
     } else {
         closeWorkflowManager();
@@ -4261,9 +4346,107 @@ function closeWorkflowManager() {
     const inputArea = document.querySelector('.input-area');
 
     workflowManager.style.display = 'none';
-    // 恢复原始display值（移除内联样式，使用CSS默认值）
     chatContainer.style.display = '';
     inputArea.style.display = '';
+}
+
+/**
+ * 显示工作流列表视图
+ */
+function showWorkflowListView() {
+    document.getElementById('workflowListView').style.display = '';
+    document.getElementById('workflowEditorView').style.display = 'none';
+    renderWorkflowList();
+}
+
+/**
+ * 显示工作流编辑器视图
+ * @param {string|null} workflowId - 工作流ID，null表示新建
+ * @param {boolean} readOnly - 是否只读模式（查看官方工作流）
+ */
+function showWorkflowEditorView(workflowId, readOnly = false) {
+    document.getElementById('workflowListView').style.display = 'none';
+    document.getElementById('workflowEditorView').style.display = '';
+    initWorkflowEditor(workflowId, readOnly);
+}
+
+/**
+ * 渲染工作流列表
+ */
+function renderWorkflowList() {
+    const data = loadAllWorkflows();
+    const officialList = document.getElementById('officialWorkflowList');
+    const userList = document.getElementById('userWorkflowList');
+
+    // 渲染官方工作流
+    const officialWorkflows = data.workflows.filter(w => w.isOfficial);
+    officialList.innerHTML = officialWorkflows.map(wf => renderWorkflowCard(wf, data.activeWorkflowId)).join('');
+
+    // 渲染用户工作流
+    const userWorkflows = data.workflows.filter(w => !w.isOfficial);
+    if (userWorkflows.length === 0) {
+        userList.innerHTML = '<div class="workflow-empty-hint">暂无自定义工作流，点击上方按钮新建</div>';
+    } else {
+        userList.innerHTML = userWorkflows.map(wf => renderWorkflowCard(wf, data.activeWorkflowId)).join('');
+    }
+}
+
+/**
+ * 渲染单个工作流卡片
+ */
+function renderWorkflowCard(workflow, activeId) {
+    const isActive = workflow.id === activeId;
+    const stepCount = workflow.steps.length;
+    const stepNames = workflow.steps.map(s => WORKFLOW_STEP_TYPES[s.stepType]?.name || s.stepType).join(' → ');
+
+    let actionsHtml = '';
+    if (workflow.isOfficial) {
+        actionsHtml = `
+            <div class="workflow-card-actions">
+                <button class="btn-workflow-view" onclick="event.stopPropagation(); showWorkflowEditorView('${workflow.id}', true)">查看</button>
+            </div>`;
+    } else {
+        actionsHtml = `
+            <div class="workflow-card-actions">
+                <button class="btn-workflow-edit" onclick="event.stopPropagation(); showWorkflowEditorView('${workflow.id}')">编辑</button>
+                <button class="btn-workflow-delete" onclick="event.stopPropagation(); handleDeleteWorkflow('${workflow.id}')">删除</button>
+            </div>`;
+    }
+
+    return `
+        <div class="workflow-card ${isActive ? 'active' : ''}" onclick="handleSelectWorkflow('${workflow.id}')">
+            <div class="workflow-card-radio"></div>
+            <div class="workflow-card-info">
+                <div class="workflow-card-name">${escapeHtml(workflow.name)}</div>
+                <div class="workflow-card-desc" title="${escapeHtml(stepNames)}">${escapeHtml(workflow.description || stepNames)}</div>
+            </div>
+            <div class="workflow-card-meta">
+                <span class="workflow-card-steps">${stepCount}步</span>
+                ${workflow.isOfficial ? '<span class="workflow-card-lock" title="官方工作流不可编辑">🔒</span>' : ''}
+            </div>
+            ${actionsHtml}
+        </div>`;
+}
+
+/**
+ * 选择工作流（切换激活状态）
+ */
+function handleSelectWorkflow(workflowId) {
+    if (setActiveWorkflow(workflowId)) {
+        renderWorkflowList();
+        showToast('已切换工作流', 'success');
+    }
+}
+
+/**
+ * 删除用户工作流
+ */
+function handleDeleteWorkflow(workflowId) {
+    if (!confirm('确定要删除这个工作流吗？')) return;
+    if (deleteUserWorkflow(workflowId)) {
+        renderWorkflowList();
+        showToast('工作流已删除', 'success');
+    }
 }
 
 /**
@@ -4363,6 +4546,735 @@ function updateModelOptions(stepType, selectId) {
     // 如果当前选中的模型不可用，选择第一个可用的
     if (availableModels.length > 0 && !availableModels.some(m => m.value === select.value)) {
         select.value = availableModels[0].value;
+    }
+}
+
+// ============ 工作流多实例管理 ============
+
+/**
+ * 生成唯一ID
+ */
+function generateWorkflowId() {
+    return 'wf_user_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * 加载所有工作流数据
+ * @returns {{ activeWorkflowId: string, workflows: Array }}
+ */
+function loadAllWorkflows() {
+    const data = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'workflows');
+    if (data && data.workflows && data.workflows.length > 0) {
+        // 同步官方工作流的最新定义（确保 connections、position 等字段更新）
+        const officialWorkflows = getOfficialWorkflows();
+        data.workflows = data.workflows.map(wf => {
+            if (wf.isOfficial) {
+                const latest = officialWorkflows.find(o => o.id === wf.id);
+                if (latest) return latest;
+            }
+            return wf;
+        });
+        // 确保有默认的官方工作流
+        officialWorkflows.forEach(official => {
+            if (!data.workflows.find(w => w.id === official.id)) {
+                data.workflows.unshift(official);
+            }
+        });
+        return data;
+    }
+    // 首次加载，初始化官方工作流
+    const initial = { activeWorkflowId: 'wf_official_default', workflows: getOfficialWorkflows() };
+    saveAllWorkflows(initial);
+    return initial;
+}
+
+/**
+ * 保存所有工作流数据
+ */
+function saveAllWorkflows(data) {
+    StorageAdapter.saveSync(APP_CONFIG.storagePrefix + 'workflows', data);
+}
+
+/**
+ * 获取当前激活的工作流
+ * @returns {Object|null}
+ */
+function getActiveWorkflow() {
+    const data = loadAllWorkflows();
+    return data.workflows.find(w => w.id === data.activeWorkflowId) || data.workflows[0] || null;
+}
+
+/**
+ * 设置激活的工作流
+ */
+function setActiveWorkflow(workflowId) {
+    const data = loadAllWorkflows();
+    if (!data.workflows.find(w => w.id === workflowId)) return false;
+    data.activeWorkflowId = workflowId;
+    saveAllWorkflows(data);
+    return true;
+}
+
+/**
+ * 创建用户自定义工作流
+ * @returns {Object} 创建的工作流对象
+ */
+function createUserWorkflow(name, description, steps, connections) {
+    const data = loadAllWorkflows();
+    const workflow = {
+        id: generateWorkflowId(),
+        name: name || '自定义工作流',
+        description: description || '',
+        isOfficial: false,
+        steps: steps || [{ stepType: 'answer', enabled: true, config: { ...WORKFLOW_STEP_TYPES.answer.defaultConfig } }],
+        connections: connections || [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+    data.workflows.push(workflow);
+    saveAllWorkflows(data);
+    return workflow;
+}
+
+/**
+ * 更新用户工作流
+ */
+function updateUserWorkflow(id, updates) {
+    const data = loadAllWorkflows();
+    const index = data.workflows.findIndex(w => w.id === id);
+    if (index === -1 || data.workflows[index].isOfficial) return false;
+    Object.assign(data.workflows[index], updates, { updatedAt: new Date().toISOString() });
+    saveAllWorkflows(data);
+    return true;
+}
+
+/**
+ * 删除用户工作流
+ */
+function deleteUserWorkflow(id) {
+    const data = loadAllWorkflows();
+    const wf = data.workflows.find(w => w.id === id);
+    if (!wf || wf.isOfficial) return false;
+    data.workflows = data.workflows.filter(w => w.id !== id);
+    // 如果删除的是当前激活的工作流，切换到默认
+    if (data.activeWorkflowId === id) {
+        data.activeWorkflowId = 'wf_official_default';
+    }
+    saveAllWorkflows(data);
+    return true;
+}
+
+/**
+ * 迁移旧版工作流配置到新系统
+ */
+function migrateOldWorkflowConfig() {
+    const newKey = APP_CONFIG.storagePrefix + 'workflows';
+    const existing = StorageAdapter.loadSync(newKey);
+    if (existing && existing.workflows && existing.workflows.length > 0) {
+        return; // 已经迁移过
+    }
+
+    const oldConfig = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'workflow_config');
+    const officialWorkflows = getOfficialWorkflows();
+
+    if (oldConfig && oldConfig.steps) {
+        // 将旧配置转换为用户工作流
+        const migratedWorkflow = {
+            id: 'wf_user_migrated',
+            name: '迁移的工作流配置',
+            description: '从旧版本配置自动迁移',
+            isOfficial: false,
+            steps: [
+                { stepType: 'intent',    enabled: oldConfig.steps.intent?.enabled !== false,    config: { model: oldConfig.steps.intent?.model || 'deepseek-v4-flash', thinking: oldConfig.steps.intent?.thinking || false, reasoningEffort: oldConfig.steps.intent?.reasoningEffort || 'medium', maxTokens: oldConfig.steps.intent?.maxTokens || 512 } },
+                { stepType: 'image',     enabled: oldConfig.steps.image?.enabled !== false,     config: { model: oldConfig.steps.image?.model || 'mimo-v2.5', maxTokens: oldConfig.steps.image?.maxTokens || 1024 } },
+                { stepType: 'search',    enabled: oldConfig.steps.search?.enabled !== false,    config: { model: oldConfig.steps.search?.model || 'mimo-v2.5-pro', limit: oldConfig.steps.search?.limit || 5, maxKeyword: oldConfig.steps.search?.maxKeyword || 3, maxTokens: oldConfig.steps.search?.maxTokens || 2048 } },
+                { stepType: 'generate',  enabled: oldConfig.steps.generate?.enabled !== false,  config: { model: oldConfig.steps.generate?.model || 'gpt-image-2', size: oldConfig.steps.generate?.size || '1792x1024', quality: oldConfig.steps.generate?.quality || 'hd' } },
+                { stepType: 'answer',    enabled: true, config: { model: oldConfig.steps.answer?.model || 'deepseek-v4-flash', thinking: oldConfig.steps.answer?.thinking !== false, reasoningEffort: oldConfig.steps.answer?.reasoningEffort || 'medium', maxTokens: oldConfig.steps.answer?.maxTokens || 4096 } }
+            ],
+            connections: [
+                { from: 0, to: 1 }, { from: 1, to: 2 }, { from: 2, to: 4 },
+                { from: 0, to: 3 }, { from: 3, to: 4 }
+            ],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        saveAllWorkflows({
+            activeWorkflowId: 'wf_user_migrated',
+            workflows: [...officialWorkflows, migratedWorkflow]
+        });
+    } else {
+        // 无旧配置，初始化官方工作流
+        saveAllWorkflows({
+            activeWorkflowId: 'wf_official_default',
+            workflows: officialWorkflows
+        });
+    }
+}
+
+// ============ 节点连线式工作流编辑器 ============
+
+// 编辑器临时状态
+let editorWorkflow = null;
+let editorIsNew = false;
+let editorReadOnly = false;
+let selectedNodeIndex = null;
+// 连线绘制状态
+let drawingConnection = null; // { fromIndex, fromPort, startX, startY }
+// 节点拖拽状态
+let draggingNode = null; // { index, offsetX, offsetY }
+
+/**
+ * 初始化工作流编辑器
+ */
+function initWorkflowEditor(workflowId, readOnly = false) {
+    editorReadOnly = readOnly;
+    selectedNodeIndex = null;
+    drawingConnection = null;
+    draggingNode = null;
+
+    if (workflowId) {
+        const data = loadAllWorkflows();
+        const wf = data.workflows.find(w => w.id === workflowId);
+        if (!wf) { showWorkflowListView(); return; }
+        editorWorkflow = JSON.parse(JSON.stringify(wf));
+        // 确保有 connections 和 position
+        if (!editorWorkflow.connections) editorWorkflow.connections = [];
+        editorWorkflow.steps.forEach((s, i) => {
+            if (!s.position) s.position = autoLayoutPosition(i, editorWorkflow.steps.length);
+        });
+        editorIsNew = false;
+        document.getElementById('editorTitle').textContent = readOnly ? '查看工作流' : '编辑工作流';
+    } else {
+        editorWorkflow = {
+            id: null, name: '', description: '', isOfficial: false,
+            steps: [{ stepType: 'answer', enabled: true, config: { ...WORKFLOW_STEP_TYPES.answer.defaultConfig }, position: { x: 400, y: 150 } }],
+            connections: []
+        };
+        editorIsNew = true;
+        document.getElementById('editorTitle').textContent = '新建工作流';
+    }
+
+    const nameInput = document.getElementById('workflowName');
+    const descInput = document.getElementById('workflowDesc');
+    nameInput.value = editorWorkflow.name;
+    descInput.value = editorWorkflow.description || '';
+    nameInput.disabled = readOnly;
+    descInput.disabled = readOnly;
+
+    document.getElementById('saveWorkflowBtn').style.display = readOnly ? 'none' : '';
+    document.getElementById('cancelEditBtn').textContent = readOnly ? '返回' : '取消';
+
+    // 隐藏右侧配置面板（只读模式下隐藏可用步骤）
+    const sidebar = document.getElementById('workflowSidebar');
+    if (sidebar) {
+        const availPanel = document.getElementById('availableStepsPanel')?.parentElement;
+        const configPanel = document.getElementById('nodeConfigPanel');
+        if (availPanel) availPanel.style.display = readOnly ? 'none' : '';
+        if (configPanel) configPanel.style.display = 'none';
+    }
+
+    renderCanvas();
+    renderAvailableSteps();
+    if (!readOnly) initCanvasEvents();
+}
+
+/**
+ * 自动布局位置计算
+ */
+function autoLayoutPosition(index, total) {
+    const startX = 80;
+    const startY = 60;
+    const gapX = 260;
+    const gapY = 160;
+    const cols = Math.max(2, Math.ceil(Math.sqrt(total)));
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    return { x: startX + col * gapX, y: startY + row * gapY };
+}
+
+/**
+ * 渲染画布（节点 + 连线）
+ */
+function renderCanvas() {
+    const nodesContainer = document.getElementById('workflowNodes');
+    const svgContainer = document.getElementById('workflowConnections');
+    if (!nodesContainer || !svgContainer || !editorWorkflow) return;
+
+    // 渲染节点
+    nodesContainer.innerHTML = editorWorkflow.steps.map((step, index) => {
+        const st = WORKFLOW_STEP_TYPES[step.stepType];
+        if (!st) return '';
+        const pos = step.position || { x: 80, y: 60 };
+        const isSelected = selectedNodeIndex === index;
+        const modelDisplay = MODEL_CONFIG.displayNames[step.config.model] || step.config.model;
+
+        return `<div class="workflow-node ${isSelected ? 'selected' : ''} ${!step.enabled ? 'disabled' : ''}"
+                     data-node-index="${index}"
+                     style="left:${pos.x}px; top:${pos.y}px;">
+            <div class="node-header" data-drag-handle="${index}">
+                <span class="node-icon">${st.icon}</span>
+                <span class="node-title">${st.name}</span>
+                ${!editorReadOnly ? `<button class="btn-node-remove" onclick="event.stopPropagation(); removeEditorStep(${index})" title="移除">&times;</button>` : ''}
+            </div>
+            <div class="node-body">
+                <div class="node-model">${modelDisplay}</div>
+                <div class="node-actions">
+                    <button class="btn-node-toggle ${step.enabled ? 'active' : ''}" onclick="event.stopPropagation(); toggleEditorStepEnabled(${index}, !editorWorkflow.steps[${index}].enabled); renderCanvas();">
+                        ${step.enabled ? '启用' : '禁用'}
+                    </button>
+                    <button class="btn-node-config" onclick="event.stopPropagation(); selectNode(${index})">配置</button>
+                </div>
+            </div>
+            <div class="node-ports">
+                <div class="node-port port-in" data-port="in" data-node="${index}" title="输入端口">
+                    <span class="port-label">入</span>
+                </div>
+                <div class="node-port port-out" data-port="out" data-node="${index}" title="出发端口">
+                    <span class="port-label">出</span>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // 渲染连线
+    renderConnections();
+}
+
+/**
+ * 渲染 SVG 连线
+ */
+function renderConnections() {
+    const svg = document.getElementById('workflowConnections');
+    if (!svg || !editorWorkflow) return;
+
+    let paths = '';
+    const connections = editorWorkflow.connections || [];
+
+    connections.forEach((conn, i) => {
+        const fromStep = editorWorkflow.steps[conn.from];
+        const toStep = editorWorkflow.steps[conn.to];
+        if (!fromStep || !toStep) return;
+
+        const fromPos = fromStep.position || { x: 80, y: 60 };
+        const toPos = toStep.position || { x: 80, y: 60 };
+
+        // 出发端口在节点右侧，输入端口在节点左侧
+        const startX = fromPos.x + 200; // 节点宽度
+        const startY = fromPos.y + 85;  // 端口位置
+        const endX = toPos.x;
+        const endY = toPos.y + 85;
+
+        const midX = (startX + endX) / 2;
+        const d = `M${startX},${startY} C${midX},${startY} ${midX},${endY} ${endX},${endY}`;
+
+        // 透明宽线用于点击检测
+        paths += `<path d="${d}" data-conn-index="${i}" fill="none" stroke="transparent" stroke-width="12"
+                        style="cursor: ${editorReadOnly ? 'default' : 'pointer'}; pointer-events: stroke;"/>`;
+        // 可见连线
+        paths += `<path class="connection-path" d="${d}" data-conn-index="${i}" fill="none"
+                        stroke="var(--border-color)" stroke-width="2" pointer-events="none"/>`;
+    });
+
+    // 临时连线（绘制中）
+    if (drawingConnection) {
+        const { startX, startY, endX, endY } = drawingConnection;
+        const midX = (startX + endX) / 2;
+        const d = `M${startX},${startY} C${midX},${startY} ${midX},${endY} ${endX},${endY}`;
+        paths += `<path class="temp-path" d="${d}"/>`;
+    }
+
+    svg.innerHTML = paths;
+}
+
+/**
+ * 初始化画布事件（使用事件委托，只绑定一次）
+ */
+function initCanvasEvents() {
+    const canvas = document.getElementById('workflowCanvas');
+    if (!canvas || canvas._eventsInitialized) return;
+    canvas._eventsInitialized = true;
+
+    // 鼠标按下：开始拖拽节点或绘制连线
+    canvas.addEventListener('mousedown', (e) => {
+        if (editorReadOnly) return;
+
+        // 检查是否点击端口
+        const port = e.target.closest('.node-port');
+        if (port) {
+            const nodeIndex = parseInt(port.dataset.node);
+            const portType = port.dataset.port;
+            if (portType === 'out') {
+                const step = editorWorkflow.steps[nodeIndex];
+                const pos = step.position;
+                const canvasRect = canvas.getBoundingClientRect();
+                drawingConnection = {
+                    fromIndex: nodeIndex,
+                    startX: pos.x + 200,
+                    startY: pos.y + 85,
+                    endX: e.clientX - canvasRect.left + canvas.scrollLeft,
+                    endY: e.clientY - canvasRect.top + canvas.scrollTop
+                };
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // 检查是否拖拽节点
+        const dragHandle = e.target.closest('[data-drag-handle]');
+        if (dragHandle) {
+            const index = parseInt(dragHandle.dataset.dragHandle);
+            const node = editorWorkflow.steps[index];
+            const canvasRect = canvas.getBoundingClientRect();
+            draggingNode = {
+                index,
+                offsetX: e.clientX - canvasRect.left + canvas.scrollLeft - (node.position?.x || 0),
+                offsetY: e.clientY - canvasRect.top + canvas.scrollTop - (node.position?.y || 0)
+            };
+            e.preventDefault();
+        }
+    });
+
+    // 鼠标移动
+    canvas.addEventListener('mousemove', (e) => {
+        const canvasRect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - canvasRect.left + canvas.scrollLeft;
+        const mouseY = e.clientY - canvasRect.top + canvas.scrollTop;
+
+        if (drawingConnection) {
+            drawingConnection.endX = mouseX;
+            drawingConnection.endY = mouseY;
+            renderConnections();
+            return;
+        }
+
+        if (draggingNode) {
+            const node = editorWorkflow.steps[draggingNode.index];
+            if (node) {
+                node.position = {
+                    x: Math.max(0, mouseX - draggingNode.offsetX),
+                    y: Math.max(0, mouseY - draggingNode.offsetY)
+                };
+                // 直接更新 DOM 位置，不重新渲染整个画布
+                const nodeEl = document.querySelector(`.workflow-node[data-node-index="${draggingNode.index}"]`);
+                if (nodeEl) {
+                    nodeEl.style.left = node.position.x + 'px';
+                    nodeEl.style.top = node.position.y + 'px';
+                }
+                renderConnections();
+            }
+            return;
+        }
+    });
+
+    // 鼠标释放
+    canvas.addEventListener('mouseup', (e) => {
+        if (drawingConnection) {
+            // 检查是否释放在目标节点上（整个节点卡片，不限于端口）
+            const targetNode = e.target.closest('.workflow-node');
+            if (targetNode) {
+                const toIndex = parseInt(targetNode.dataset.nodeIndex);
+                if (toIndex !== drawingConnection.fromIndex) {
+                    const exists = editorWorkflow.connections.some(
+                        c => c.from === drawingConnection.fromIndex && c.to === toIndex
+                    );
+                    if (!exists) {
+                        editorWorkflow.connections.push({ from: drawingConnection.fromIndex, to: toIndex });
+                    }
+                }
+            }
+            drawingConnection = null;
+            renderConnections();
+            return;
+        }
+
+        if (draggingNode) {
+            draggingNode = null;
+            return;
+        }
+    });
+
+    // 点击事件处理
+    canvas.addEventListener('click', (e) => {
+        // 点击连线（SVG path）
+        const target = e.target;
+        if (target.tagName === 'path' && target.dataset.connIndex !== undefined && !editorReadOnly) {
+            const connIndex = parseInt(target.dataset.connIndex);
+            removeConnection(connIndex);
+            return;
+        }
+
+        // 点击画布空白处取消选中
+        if (!e.target.closest('.workflow-node')) {
+            selectedNodeIndex = null;
+            const configPanel = document.getElementById('nodeConfigPanel');
+            if (configPanel) configPanel.style.display = 'none';
+            document.querySelectorAll('.workflow-node.selected').forEach(el => el.classList.remove('selected'));
+        }
+    });
+
+    // 连线 hover 效果
+    canvas.addEventListener('mouseover', (e) => {
+        const target = e.target;
+        if (target.tagName === 'path' && target.dataset.connIndex !== undefined) {
+            const connIndex = target.dataset.connIndex;
+            const visiblePath = canvas.querySelector(`.connection-path[data-conn-index="${connIndex}"]`);
+            if (visiblePath) {
+                visiblePath.setAttribute('stroke', '#e74c3c');
+                visiblePath.setAttribute('stroke-width', '3');
+            }
+        }
+    });
+
+    canvas.addEventListener('mouseout', (e) => {
+        const target = e.target;
+        if (target.tagName === 'path' && target.dataset.connIndex !== undefined) {
+            const connIndex = target.dataset.connIndex;
+            const visiblePath = canvas.querySelector(`.connection-path[data-conn-index="${connIndex}"]`);
+            if (visiblePath) {
+                visiblePath.setAttribute('stroke', 'var(--border-color)');
+                visiblePath.setAttribute('stroke-width', '2');
+            }
+        }
+    });
+
+    // 鼠标离开画布时取消操作
+    canvas.addEventListener('mouseleave', () => {
+        if (drawingConnection) {
+            drawingConnection = null;
+            renderConnections();
+        }
+        if (draggingNode) {
+            draggingNode = null;
+        }
+    });
+}
+
+/**
+ * 选中节点（显示配置）
+ */
+function selectNode(index) {
+    selectedNodeIndex = index;
+    // 更新选中样式
+    document.querySelectorAll('.workflow-node').forEach(el => {
+        el.classList.toggle('selected', parseInt(el.dataset.nodeIndex) === index);
+    });
+    renderNodeConfig(index);
+}
+
+/**
+ * 渲染节点配置面板
+ */
+function renderNodeConfig(index) {
+    const configPanel = document.getElementById('nodeConfigPanel');
+    const configContent = document.getElementById('nodeConfigContent');
+    if (!configPanel || !configContent || !editorWorkflow) return;
+
+    const step = editorWorkflow.steps[index];
+    if (!step) return;
+
+    configPanel.style.display = '';
+    const st = WORKFLOW_STEP_TYPES[step.stepType];
+    const ro = editorReadOnly ? 'disabled' : '';
+
+    configContent.innerHTML = `
+        <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">${st.icon} ${st.name}</div>
+        ${renderNodeConfigFields(step.stepType, step.config, index, ro)}
+    `;
+}
+
+/**
+ * 渲染节点配置字段
+ */
+function renderNodeConfigFields(stepType, config, index, ro) {
+    const models = getAvailableModelsForStepType(stepType);
+    let html = `<div class="config-row">
+        <label>模型</label>
+        <select ${ro} onchange="updateEditorStepConfig(${index}, 'model', this.value); renderNodeConfig(${index});">
+            ${models.map(m => `<option value="${m.value}" ${config.model === m.value ? 'selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+    </div>`;
+
+    if (stepType === 'intent' || stepType === 'answer') {
+        const isMiMo = config.model && config.model.startsWith('mimo');
+        if (!isMiMo) {
+            html += `<div class="config-row"><label>深度思考</label>
+                <select ${ro} onchange="updateEditorStepConfig(${index}, 'thinking', this.value==='true')">
+                    <option value="false" ${!config.thinking?'selected':''}>关闭</option>
+                    <option value="true" ${config.thinking?'selected':''}>开启</option>
+                </select></div>
+            <div class="config-row"><label>推理强度</label>
+                <select ${ro} onchange="updateEditorStepConfig(${index}, 'reasoningEffort', this.value)">
+                    <option value="low" ${config.reasoningEffort==='low'?'selected':''}>低</option>
+                    <option value="medium" ${config.reasoningEffort==='medium'?'selected':''}>中</option>
+                    <option value="high" ${config.reasoningEffort==='high'?'selected':''}>高</option>
+                </select></div>`;
+        }
+    }
+
+    if (stepType !== 'generate') {
+        const maxTokens = config.maxTokens || WORKFLOW_STEP_TYPES[stepType].defaultConfig.maxTokens || 1024;
+        html += `<div class="config-row"><label>最大Token</label>
+            <input type="number" value="${maxTokens}" min="256" max="16384" step="256" ${ro}
+                   onchange="updateEditorStepConfig(${index}, 'maxTokens', parseInt(this.value))"></div>`;
+    }
+
+    if (stepType === 'search') {
+        html += `<div class="config-row"><label>最大结果</label>
+            <input type="number" value="${config.limit||5}" min="1" max="15" ${ro}
+                   onchange="updateEditorStepConfig(${index}, 'limit', parseInt(this.value))"></div>
+        <div class="config-row"><label>最大关键词</label>
+            <input type="number" value="${config.maxKeyword||3}" min="1" max="5" ${ro}
+                   onchange="updateEditorStepConfig(${index}, 'maxKeyword', parseInt(this.value))"></div>`;
+    }
+
+    if (stepType === 'generate') {
+        html += `<div class="config-row"><label>图片尺寸</label>
+            <select ${ro} onchange="updateEditorStepConfig(${index}, 'size', this.value)">
+                <option value="1024x1024" ${config.size==='1024x1024'?'selected':''}>1024x1024</option>
+                <option value="1792x1024" ${config.size==='1792x1024'?'selected':''}>1792x1024</option>
+                <option value="1024x1792" ${config.size==='1024x1792'?'selected':''}>1024x1792</option>
+            </select></div>
+        <div class="config-row"><label>图片质量</label>
+            <select ${ro} onchange="updateEditorStepConfig(${index}, 'quality', this.value)">
+                <option value="standard" ${config.quality==='standard'?'selected':''}>标准</option>
+                <option value="hd" ${config.quality==='hd'?'selected':''}>高清</option>
+            </select></div>`;
+    }
+
+    return html;
+}
+
+/**
+ * 获取指定步骤类型可用的模型列表
+ */
+function getAvailableModelsForStepType(stepType) {
+    const typeMap = { intent: 'intent', image: 'image', search: 'search', generate: 'generate', answer: 'answer' };
+    const mappedType = typeMap[stepType] || stepType;
+    const models = getAvailableModels(mappedType);
+    if (models.length === 0) {
+        const defaultModel = WORKFLOW_STEP_TYPES[stepType]?.defaultConfig.model;
+        return [{ value: defaultModel, label: MODEL_CONFIG.displayNames[defaultModel] || defaultModel }];
+    }
+    return models.map(m => ({ value: m.value, label: MODEL_CONFIG.displayNames[m.value] || m.value }));
+}
+
+/**
+ * 切换步骤启用状态
+ */
+function toggleEditorStepEnabled(index, enabled) {
+    if (!editorWorkflow || !editorWorkflow.steps[index]) return;
+    editorWorkflow.steps[index].enabled = enabled;
+}
+
+/**
+ * 更新步骤配置
+ */
+function updateEditorStepConfig(index, key, value) {
+    if (!editorWorkflow || !editorWorkflow.steps[index]) return;
+    editorWorkflow.steps[index].config[key] = value;
+    if (key === 'model') {
+        // 只更新节点显示，不重新渲染整个画布
+        const nodeEl = document.querySelector(`.workflow-node[data-node-index="${index}"]`);
+        if (nodeEl) {
+            const modelEl = nodeEl.querySelector('.node-model');
+            if (modelEl) modelEl.textContent = MODEL_CONFIG.displayNames[value] || value;
+        }
+    }
+}
+
+/**
+ * 移除节点及相关连线
+ */
+function removeEditorStep(index) {
+    if (!editorWorkflow) return;
+    editorWorkflow.steps.splice(index, 1);
+    // 更新连线索引
+    editorWorkflow.connections = editorWorkflow.connections
+        .filter(c => c.from !== index && c.to !== index)
+        .map(c => ({
+            from: c.from > index ? c.from - 1 : c.from,
+            to: c.to > index ? c.to - 1 : c.to
+        }));
+    // 更新选中节点索引
+    if (selectedNodeIndex === index) {
+        selectedNodeIndex = null;
+        const configPanel = document.getElementById('nodeConfigPanel');
+        if (configPanel) configPanel.style.display = 'none';
+    } else if (selectedNodeIndex > index) {
+        selectedNodeIndex--;
+    }
+    renderCanvas();
+    renderAvailableSteps();
+}
+
+/**
+ * 添加节点到画布（允许同类型多个节点）
+ */
+function addEditorStep(stepType) {
+    if (!editorWorkflow) return;
+    const pos = autoLayoutPosition(editorWorkflow.steps.length, editorWorkflow.steps.length + 1);
+    editorWorkflow.steps.push({
+        stepType, enabled: true,
+        config: { ...WORKFLOW_STEP_TYPES[stepType].defaultConfig },
+        position: pos
+    });
+    renderCanvas();
+}
+
+/**
+ * 删除连线
+ */
+function removeConnection(index) {
+    if (!editorWorkflow || editorReadOnly) return;
+    editorWorkflow.connections.splice(index, 1);
+    renderConnections();
+}
+
+/**
+ * 渲染可用步骤面板（允许添加多个同类型节点）
+ */
+function renderAvailableSteps() {
+    const container = document.getElementById('availableStepsPanel');
+    if (!container) return;
+    container.innerHTML = Object.values(WORKFLOW_STEP_TYPES).map(st => {
+        return `<button class="btn-add-step" onclick="addEditorStep('${st.id}')">
+            ${st.icon} ${st.name}
+        </button>`;
+    }).join('');
+}
+
+/**
+ * 保存工作流编辑
+ */
+function saveWorkflowEditor() {
+    if (!editorWorkflow) return;
+    const name = document.getElementById('workflowName').value.trim();
+    if (!name) { showToast('请输入工作流名称', 'error'); return; }
+    if (editorWorkflow.steps.length === 0) { showToast('请至少添加一个步骤', 'error'); return; }
+    if (!editorWorkflow.steps.some(s => s.stepType === 'answer')) {
+        showToast('工作流必须包含"大模型输出"步骤', 'error'); return;
+    }
+
+    editorWorkflow.name = name;
+    editorWorkflow.description = document.getElementById('workflowDesc').value.trim();
+
+    if (editorIsNew) {
+        const created = createUserWorkflow(editorWorkflow.name, editorWorkflow.description, editorWorkflow.steps, editorWorkflow.connections);
+        setActiveWorkflow(created.id);
+        // 新建后切换为编辑模式，不关闭编辑器
+        editorWorkflow.id = created.id;
+        editorIsNew = false;
+        document.getElementById('editorTitle').textContent = '编辑工作流';
+        showToast('工作流已创建', 'success');
+    } else {
+        updateUserWorkflow(editorWorkflow.id, {
+            name: editorWorkflow.name,
+            description: editorWorkflow.description,
+            steps: editorWorkflow.steps,
+            connections: editorWorkflow.connections
+        });
+        showToast('工作流已保存', 'success');
     }
 }
 
