@@ -48,6 +48,7 @@
       "config.js",
       "memory.js",
       "styles.css",
+      "secrets.js",
       "icon.ico",
       "logo.png",
       "package.json"
