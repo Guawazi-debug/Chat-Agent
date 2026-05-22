@@ -13,3 +13,6 @@ mobile-app/android/build/
 .tmp-web-run/
 .DS_Store
 Thumbs.db
+
+# API 密钥文件
+secrets.js

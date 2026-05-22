@@ -14,7 +14,7 @@ const DEFAULT_API_CONFIG = {
         name: 'MiMo',
         provider: 'xiaomi',
         endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
-        apiKey: 'sk-css0xgb61ycizseb0s2hu8527mu4uuqfrlvj2t3e00fklz7y',
+        apiKey: (typeof API_SECRETS !== 'undefined' && API_SECRETS.mimo) || '',
         models: [
             'mimo-v2.5-pro',
             'mimo-v2.5',
@@ -29,7 +29,7 @@ const DEFAULT_API_CONFIG = {
         name: 'DeepSeek',
         provider: 'deepseek',
         endpoint: 'https://api.deepseek.com/chat/completions',
-        apiKey: 'sk-a750b754eba645059bd9b51bb7640861',
+        apiKey: (typeof API_SECRETS !== 'undefined' && API_SECRETS.deepseek) || '',
         models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
         headers: {
             'Content-Type': 'application/json'
