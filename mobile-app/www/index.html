@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 对话系统 - 多模型集成</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 侧边栏：历史对话管理 -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h2>对话历史</h2>
+            <div class="sidebar-header-actions">
+                <button class="btn-select-mode" id="selectModeBtn" title="多选删除">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 11 12 14 22 4"></polyline>
+                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                    </svg>
+                </button>
+                <button class="btn-clear-all" id="clearAllBtn" title="清空所有对话">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                </button>
+                <button class="btn-new-chat" id="newChatBtn" title="新建对话">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
+                <button class="btn-close-sidebar sidebar-close-btn" id="closeSidebarBtn" title="关闭侧边栏">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="sidebar-nav">
+            <button class="btn-workflow-manager" id="workflowManagerBtn" title="工作流管理">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                    <path d="M2 17l10 5 10-5"></path>
+                    <path d="M2 12l10 5 10-5"></path>
+                </svg>
+                <span>工作流管理</span>
+            </button>
+        </div>
+        <div class="history-list" id="historyList">
+            <!-- 历史对话列表将动态生成 -->
+        </div>
+        <div class="select-actions" id="selectActions" style="display: none;">
+            <button class="btn-select-all" id="selectAllBtn">全选</button>
+            <button class="btn-delete-selected" id="deleteSelectedBtn">删除选中</button>
+            <button class="btn-cancel-select" id="cancelSelectBtn">取消</button>
+        </div>
+        <div class="sidebar-footer">
+            <button class="btn-settings" id="settingsBtn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                设置
+            </button>
+        </div>
+    </aside>
+
+    <!-- 侧边栏遮罩层 -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- 主内容区域 -->
+    <main class="main-content">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <button class="btn-toggle-sidebar" id="toggleSidebarBtn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+            <!-- 工作流状态显示 -->
+            <div class="workflow-status" id="workflowStatus" style="display: none;">
+                <div class="workflow-step" id="workflowStep">
+                    <span class="step-icon">🔄</span>
+                    <span class="step-text">准备中...</span>
+                    <span class="step-model" id="workflowModel"></span>
+                </div>
+                <div class="workflow-progress-bar">
+                    <div class="progress-bar" id="workflowProgress"></div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <!-- 记忆按钮（始终显示） -->
+                <button class="btn-memory" id="memoryBtn" title="上下文记忆设置">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"></path>
+                    </svg>
+                </button>
+                <!-- 主题切换（始终显示） -->
+                <button class="btn-theme-toggle" id="themeToggleBtn" title="切换主题">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- 对话区域 -->
+        <div class="chat-container" id="chatContainer">
+            <div class="chat-messages" id="chatMessages">
+                <!-- 欢迎消息 -->
+                <div class="welcome-message">
+                    <h1>AI 对话系统</h1>
+                    <p>智能工作流自动处理，DeepSeek 意图识别 + MiMo 图片理解 + 联网搜索</p>
+                    <div class="feature-tags">
+                        <span class="tag">智能意图识别</span>
+                        <span class="tag">图片理解</span>
+                        <span class="tag">联网搜索</span>
+                        <span class="tag">深度思考</span>
+                        <span class="tag">上下文记忆</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 工作流管理界面 -->
+        <div class="workflow-manager" id="workflowManager" style="display: none;">
+            <div class="workflow-manager-header">
+                <h2>工作流管理</h2>
+                <button class="btn-close-workflow-manager" id="closeWorkflowManagerBtn">&times;</button>
+            </div>
+            <div class="workflow-manager-content">
+                <!-- 工作流步骤配置 -->
+                <div class="workflow-section">
+                    <h3>工作流步骤</h3>
+                    <div class="workflow-steps-config">
+                        <div class="workflow-step-config" data-step="intent">
+                            <div class="step-header">
+                                <span class="step-number">1</span>
+                                <span class="step-name">意图识别</span>
+                                <label class="step-toggle">
+                                    <input type="checkbox" id="stepIntentEnabled" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="step-details">
+                                <div class="config-row">
+                                    <label>模型</label>
+                                    <select id="stepIntentModel" onchange="toggleThinkingOptions('intent', this.value)">
+                                        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+                                        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+                                        <option value="mimo-v2.5">MiMo v2.5</option>
+                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
+                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
+                                    </select>
+                                </div>
+                                <div class="config-row" id="intentThinkingRow">
+                                    <label>深度思考</label>
+                                    <select id="stepIntentThinking">
+                                        <option value="false">关闭</option>
+                                        <option value="true">开启</option>
+                                    </select>
+                                </div>
+                                <div class="config-row" id="intentReasoningRow">
+                                    <label>推理强度</label>
+                                    <select id="stepIntentReasoning">
+                                        <option value="low">低</option>
+                                        <option value="medium" selected>中</option>
+                                        <option value="high">高</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>最大Token</label>
+                                    <input type="number" id="stepIntentMaxTokens" value="512" min="256" max="2048" step="256">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="workflow-step-config" data-step="image">
+                            <div class="step-header">
+                                <span class="step-number">2</span>
+                                <span class="step-name">图片识别</span>
+                                <label class="step-toggle">
+                                    <input type="checkbox" id="stepImageEnabled" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="step-details">
+                                <div class="config-row">
+                                    <label>模型</label>
+                                    <select id="stepImageModel">
+                                        <option value="mimo-v2.5">MiMo v2.5</option>
+                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>最大Token</label>
+                                    <input type="number" id="stepImageMaxTokens" value="1024" min="512" max="4096" step="512">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="workflow-step-config" data-step="search">
+                            <div class="step-header">
+                                <span class="step-number">3</span>
+                                <span class="step-name">联网搜索</span>
+                                <label class="step-toggle">
+                                    <input type="checkbox" id="stepSearchEnabled" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="step-details">
+                                <div class="config-row">
+                                    <label>模型</label>
+                                    <select id="stepSearchModel">
+                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+                                        <option value="mimo-v2.5">MiMo v2.5</option>
+                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
+                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>最大结果数</label>
+                                    <input type="number" id="stepSearchLimit" value="5" min="1" max="15">
+                                </div>
+                                <div class="config-row">
+                                    <label>最大关键词</label>
+                                    <input type="number" id="stepSearchMaxKeyword" value="3" min="1" max="5">
+                                </div>
+                                <div class="config-row">
+                                    <label>最大Token</label>
+                                    <input type="number" id="stepSearchMaxTokens" value="2048" min="1024" max="8192" step="1024">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="workflow-step-config" data-step="generate">
+                            <div class="step-header">
+                                <span class="step-number">4</span>
+                                <span class="step-name">图片生成</span>
+                                <label class="step-toggle">
+                                    <input type="checkbox" id="stepGenerateEnabled" checked>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="step-details">
+                                <div class="config-row">
+                                    <label>模型</label>
+                                    <select id="stepGenerateModel">
+                                        <option value="gpt-image-2">GPT-Image-2</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>图片尺寸</label>
+                                    <select id="stepGenerateSize">
+                                        <option value="1024x1024">1024x1024 (标准)</option>
+                                        <option value="1792x1024">1792x1024 (横版)</option>
+                                        <option value="1024x1792">1024x1792 (竖版)</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>图片质量</label>
+                                    <select id="stepGenerateQuality">
+                                        <option value="standard">标准</option>
+                                        <option value="hd">高清</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="workflow-step-config" data-step="answer">
+                            <div class="step-header">
+                                <span class="step-number">5</span>
+                                <span class="step-name">生成回答</span>
+                                <label class="step-toggle">
+                                    <input type="checkbox" id="stepAnswerEnabled" checked disabled>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="step-details">
+                                <div class="config-row">
+                                    <label>模型</label>
+                                    <select id="stepAnswerModel" onchange="toggleThinkingOptions('answer', this.value)">
+                                        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+                                        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+                                        <option value="mimo-v2.5">MiMo v2.5</option>
+                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
+                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
+                                    </select>
+                                </div>
+                                <div class="config-row" id="answerThinkingRow">
+                                    <label>深度思考</label>
+                                    <select id="stepAnswerThinking">
+                                        <option value="true" selected>开启</option>
+                                        <option value="false">关闭</option>
+                                    </select>
+                                </div>
+                                <div class="config-row" id="answerReasoningRow">
+                                    <label>推理强度</label>
+                                    <select id="stepAnswerReasoning">
+                                        <option value="low">低</option>
+                                        <option value="medium" selected>中</option>
+                                        <option value="high">高</option>
+                                    </select>
+                                </div>
+                                <div class="config-row">
+                                    <label>最大Token</label>
+                                    <input type="number" id="stepAnswerMaxTokens" value="4096" min="1024" max="16384" step="1024">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 提示词配置 -->
+                <div class="workflow-section">
+                    <h3>提示词配置</h3>
+                    <div class="prompt-configs">
+                        <div class="prompt-config">
+                            <label>意图识别提示词</label>
+                            <textarea id="promptIntent" rows="4" placeholder="输入意图识别提示词..."></textarea>
+                        </div>
+                        <div class="prompt-config">
+                            <label>图片识别提示词</label>
+                            <textarea id="promptImage" rows="4" placeholder="输入图片识别提示词..."></textarea>
+                        </div>
+                        <div class="prompt-config">
+                            <label>最终回答提示词</label>
+                            <textarea id="promptAnswer" rows="4" placeholder="输入最终回答提示词..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 操作按钮 -->
+                <div class="workflow-actions">
+                    <button class="btn-save-workflow" id="saveWorkflowBtn">保存配置</button>
+                    <button class="btn-reset-workflow" id="resetWorkflowBtn">恢复默认</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="input-area">
+            <div class="input-wrapper">
+                <div class="image-preview-container" id="imagePreviewContainer" style="display: none;">
+                    <div class="image-preview-item">
+                        <img id="imagePreview" src="" alt="预览">
+                        <button class="btn-remove-image" id="removeImageBtn" title="移除图片">&times;</button>
+                    </div>
+                </div>
+                <div class="input-main">
+                    <button class="btn-upload" id="uploadBtn" title="上传图片">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                    </button>
+                    <textarea
+                        id="messageInput"
+                        placeholder="输入消息... (Shift+Enter 换行，Enter 发送)"
+                        rows="1"
+                    ></textarea>
+                    <button class="btn-send" id="sendBtn" title="发送消息">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <input type="file" id="imageInput" accept="image/*" style="display: none;">
+            </div>
+            <div class="input-footer">
+                <span class="char-count" id="charCount">0 字符</span>
+                <span class="context-info" id="contextInfo">上下文: 0 条消息</span>
+            </div>
+        </div>
+    </main>
+
+    <!-- 设置模态框 -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>API 设置</h2>
+                <button class="btn-close" id="closeSettingsBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-tabs">
+                    <button class="tab-btn active" data-tab="api">API 配置</button>
+                    <button class="tab-btn" data-tab="memory">记忆设置</button>
+                    <button class="tab-btn" data-tab="avatar">头像设置</button>
+                    <button class="tab-btn" data-tab="storage">存储设置</button>
+                </div>
+
+                <!-- API 配置面板 -->
+                <div class="tab-panel active" id="apiPanel">
+                    <div class="setting-group">
+                        <h3>小米 MiMo</h3>
+                        <div class="input-group">
+                            <label>API Key</label>
+                            <input type="password" id="mimoKey" placeholder="输入 MiMo API Key">
+                        </div>
+                        <div class="input-group">
+                            <label>API 地址</label>
+                            <input type="text" id="mimoEndpoint" placeholder="https://api.xiaomimimo.com/v1/chat/completions">
+                        </div>
+                        <button class="btn-test-api" id="testMimoBtn" onclick="testApiConnection('mimo')">测速</button>
+                        <span class="test-result" id="mimoTestResult"></span>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>DeepSeek</h3>
+                        <div class="input-group">
+                            <label>API Key</label>
+                            <input type="password" id="deepseekKey" placeholder="输入 DeepSeek API Key">
+                        </div>
+                        <div class="input-group">
+                            <label>API 地址</label>
+                            <input type="text" id="deepseekEndpoint" placeholder="https://api.deepseek.com/chat/completions">
+                        </div>
+                        <button class="btn-test-api" id="testDeepseekBtn" onclick="testApiConnection('deepseek')">测速</button>
+                        <span class="test-result" id="deepseekTestResult"></span>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>GPT-Image (图像生成)</h3>
+                        <div class="input-group">
+                            <label>API Key</label>
+                            <input type="password" id="imageKey" placeholder="输入 GPT-Image API Key">
+                        </div>
+                        <div class="input-group">
+                            <label>API 地址</label>
+                            <input type="text" id="imageEndpoint" placeholder="https://zz.imzr.top/v1/images/generations">
+                        </div>
+                        <button class="btn-test-api" id="testImageBtn" onclick="testApiConnection('image')">测速</button>
+                        <span class="test-result" id="imageTestResult"></span>
+                    </div>
+
+                    <div class="setting-group api-key-links">
+                        <h3>API Key 获取地址</h3>
+                        <div class="api-link-item">
+                            <span class="api-link-label">小米 MiMo：</span>
+                            <a href="https://platform.xiaomimimo.com/console/api-keys" target="_blank" rel="noopener noreferrer">platform.xiaomimimo.com</a>
+                        </div>
+                        <div class="api-link-item">
+                            <span class="api-link-label">DeepSeek：</span>
+                            <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">platform.deepseek.com</a>
+                        </div>
+                    </div>
+
+                    <button class="btn-save" id="saveApiBtn">保存 API 配置</button>
+                </div>
+
+                <!-- 记忆设置面板 -->
+                <div class="tab-panel" id="memoryPanel">
+                    <div class="setting-group">
+                        <h3>上下文记忆设置</h3>
+                        <div class="input-group">
+                            <label>最大上下文消息数</label>
+                            <input type="number" id="maxContextMessages" value="50" min="10" max="200">
+                            <small>设置保留的最大上下文消息数量</small>
+                        </div>
+                        <div class="input-group">
+                            <label>记忆摘要触发阈值</label>
+                            <input type="number" id="summaryThreshold" value="30" min="10" max="100">
+                            <small>当消息超过此数量时自动生成摘要</small>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="enableLongTermMemory" checked>
+                            <label for="enableLongTermMemory">启用长期记忆</label>
+                            <small>保存重要信息以便在新对话中使用</small>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="autoSummarize" checked>
+                            <label for="autoSummarize">自动摘要</label>
+                            <small>自动压缩过长的上下文</small>
+                        </div>
+                    </div>
+                    <button class="btn-save" id="saveMemoryBtn">保存记忆设置</button>
+                    <button class="btn-danger" id="clearMemoryBtn">清除所有记忆</button>
+                </div>
+
+                <!-- 头像设置面板 -->
+                <div class="tab-panel" id="avatarPanel">
+                    <div class="setting-group">
+                        <h3>选择头像</h3>
+                        <p class="setting-description">选择一个预设头像，或上传自定义图片作为你的头像。</p>
+                        <div class="avatar-current">
+                            <span>当前头像：</span>
+                            <div class="avatar-preview" id="avatarPreview">👤</div>
+                        </div>
+                        <div class="avatar-grid" id="avatarGrid">
+                            <div class="avatar-option active" data-emoji="👤">👤</div>
+                            <div class="avatar-option" data-emoji="🧑">🧑</div>
+                            <div class="avatar-option" data-emoji="👨">👨</div>
+                            <div class="avatar-option" data-emoji="👩">👩</div>
+                            <div class="avatar-option" data-emoji="🧒">🧒</div>
+                            <div class="avatar-option" data-emoji="👧">👧</div>
+                            <div class="avatar-option" data-emoji="🤖">🤖</div>
+                            <div class="avatar-option" data-emoji="🐱">🐱</div>
+                            <div class="avatar-option" data-emoji="🐶">🐶</div>
+                            <div class="avatar-option" data-emoji="🦊">🦊</div>
+                            <div class="avatar-option" data-emoji="🐼">🐼</div>
+                            <div class="avatar-option" data-emoji="🦁">🦁</div>
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <h3>自定义头像</h3>
+                        <p class="setting-description">上传一张图片作为你的头像。</p>
+                        <div class="avatar-upload-area" id="avatarUploadArea">
+                            <input type="file" id="avatarFileInput" accept="image/*" style="display: none;">
+                            <button class="btn-save" id="avatarUploadBtn">选择图片</button>
+                            <button class="btn-add" id="avatarResetBtn" style="margin-left: 8px;">恢复默认</button>
+                        </div>
+                    </div>
+                    <button class="btn-save" id="saveAvatarBtn">保存头像设置</button>
+                </div>
+
+                <!-- 存储设置面板 -->
+                <div class="tab-panel" id="storagePanel">
+                    <div class="setting-group">
+                        <h3>数据存储目录</h3>
+                        <p class="setting-description">设置对话记录和配置数据的存储位置。修改后需要重启应用生效。</p>
+                        <div class="input-group">
+                            <label>当前存储路径</label>
+                            <input type="text" id="storagePath" readonly placeholder="默认存储位置">
+                            <small>数据保存的物理路径</small>
+                        </div>
+                        <div class="storage-actions">
+                            <button class="btn-add electron-only" id="changeStoragePathBtn">更改存储目录</button>
+                            <button class="btn-save" id="exportAllDataBtn">导出所有数据</button>
+                            <button class="btn-save" id="importAllDataBtn">导入数据</button>
+                        </div>
+                        <div class="storage-info">
+                            <p><strong>存储说明：</strong></p>
+                            <ul>
+                                <li>桌面版：数据保存在应用安装目录下的 data 文件夹</li>
+                                <li>手机版：数据保存在应用私有目录</li>
+                                <li>网页版：数据保存在浏览器本地存储中</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <h3>数据管理</h3>
+                        <div class="storage-stats">
+                            <div class="stat">
+                                <span class="stat-label">对话数量</span>
+                                <span class="stat-value" id="chatCountStat">0</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">长期记忆条目</span>
+                                <span class="stat-value" id="memoryCountStat">0</span>
+                            </div>
+                        </div>
+                        <button class="btn-danger" id="clearAllDataBtn">清除所有数据</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 记忆查看模态框 -->
+    <div class="modal-overlay" id="memoryModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>上下文记忆</h2>
+                <button class="btn-close" id="closeMemoryBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="memory-stats">
+                    <div class="stat">
+                        <span class="stat-label">当前对话消息数</span>
+                        <span class="stat-value" id="currentMessageCount">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">长期记忆条目</span>
+                        <span class="stat-value" id="longTermMemoryCount">0</span>
+                    </div>
+                </div>
+                <div class="memory-content">
+                    <h3>长期记忆</h3>
+                    <div class="memory-items" id="memoryItems">
+                        <!-- 记忆条目将动态生成 -->
+                    </div>
+                </div>
+                <button class="btn-save" id="exportMemoryBtn">导出记忆</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自定义确认弹窗 -->
+    <div class="confirm-overlay" id="confirmOverlay" style="display: none;">
+        <div class="confirm-dialog">
+            <div class="confirm-message" id="confirmMessage"></div>
+            <div class="confirm-actions">
+                <button class="btn-confirm-cancel" id="confirmCancelBtn">取消</button>
+                <button class="btn-confirm-ok" id="confirmOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="memory.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

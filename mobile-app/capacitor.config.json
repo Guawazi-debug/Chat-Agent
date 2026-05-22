@@ -1,0 +1,37 @@
+{
+  "appId": "com.aichat.mobile",
+  "appName": "AI对话系统",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "Camera": {
+      "quality": 90
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#1a1a1e"
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 2000,
+      "backgroundColor": "#1a1a1e",
+      "showSpinner": true,
+      "spinnerColor": "#6366f1"
+    },
+    "Keyboard": {
+      "resize": "body",
+      "style": "DARK",
+      "resizeOnFullScreen": true
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#1a1a1e"
+  },
+  "ios": {
+    "backgroundColor": "#1a1a1e",
+    "contentInset": "automatic"
+  }
+}

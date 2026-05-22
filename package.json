@@ -1,0 +1,17 @@
+{
+  "name": "ai-chat-multi-target",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root workspace for independently developed Web, Electron, and Capacitor AI chat clients.",
+  "scripts": {
+    "web": "npm --prefix web-app start",
+    "desktop": "npm --prefix electron-app start",
+    "desktop:build": "npm --prefix electron-app run build",
+    "desktop:portable": "npm --prefix electron-app run build:portable",
+    "mobile:serve": "npm --prefix mobile-app start",
+    "mobile:sync": "npm --prefix mobile-app run sync",
+    "mobile:android": "npm --prefix mobile-app run android",
+    "mobile:ios": "npm --prefix mobile-app run ios"
+  },
+  "license": "MIT"
+}

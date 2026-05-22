@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+
+# 原生平台
+android/
+ios/
+
+# 构建产物
+dist/
+build/
+*.apk
+*.aab
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志
+*.log
+npm-debug.log*
+
+# Capacitor
+.capacitor/

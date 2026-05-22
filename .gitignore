@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+
+electron-app/node_modules/
+electron-app/dist/
+
+mobile-app/node_modules/
+mobile-app/android/.gradle/
+mobile-app/android/app/build/
+mobile-app/android/build/
+
+.tmp-web-run/
+.DS_Store
+Thumbs.db
