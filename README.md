@@ -95,43 +95,90 @@
 
 ## 项目结构
 
-```
-Chat-AI/
-├── web-app/                    # Web端应用
-│   ├── index.html              # UI界面
-│   ├── app.js                  # 主程序（UI逻辑、API调用、状态管理、工作流引擎）
-│   ├── config.js               # 模型配置、系统提示词、工作流配置
-│   ├── styles.css              # 样式文件
-│   ├── memory.js               # 增强记忆系统
-│   └── dev-server.mjs          # 开发服务器
-│
-├── electron-app/               # Electron桌面端
-│   ├── main.js                 # Electron主进程
-│   ├── preload.js              # 预加载脚本
-│   ├── index.html              # 桌面端UI
-│   ├── app.js                  # 桌面端主程序
-│   ├── config.js               # 桌面端配置
-│   ├── styles.css              # 桌面端样式
-│   ├── memory.js               # 桌面端记忆系统
-│   ├── package.json            # Electron依赖配置
-│   └── build.bat               # Windows构建脚本
-│
-├── mobile-app/                 # Capacitor移动端
-│   ├── capacitor.config.json   # Capacitor配置
-│   ├── www/                    # Web资源目录
-│   │   ├── index.html          # 移动端UI
-│   │   ├── app.js              # 移动端主程序
-│   │   ├── config.js           # 移动端配置
-│   │   ├── styles.css          # 移动端样式
-│   │   └── mobile.js           # Capacitor桥接
-│   ├── android/                # Android原生项目
-│   └── package.json            # Capacitor依赖配置
-│
-├── package.json                # 根目录工作区配置
-├── CLAUDE.md                   # Claude Code指导文件
-├── README.md                   # 项目说明文档
-└── 项目书.md                   # 详细项目文档
-```
+### 根目录
+
+| 文件/文件夹 | 说明 |
+|------------|------|
+| `web-app/` | Web端应用，浏览器直接访问的独立客户端 |
+| `electron-app/` | Electron桌面端应用，Windows桌面客户端 |
+| `mobile-app/` | Capacitor移动端应用，Android/iOS客户端 |
+| `package.json` | 根目录工作区配置，定义各端快捷启动命令 |
+| `README.md` | 项目说明文档，包含完整的使用和开发指南 |
+| `CLAUDE.md` | Claude Code AI助手指导文件，定义项目规范和约束 |
+| `AGENTS.md` | AI代理配置文件，定义多代理协作规则 |
+| `DEVELOPMENT.md` | 开发指南文档，说明开发环境和规范 |
+| `项目书.md` | 详细项目文档，包含完整的系统设计说明 |
+| `logo.png` | 项目Logo图片 |
+| `.gitignore` | Git忽略规则，排除node_modules、dist、secrets.js等 |
+
+### web-app/ - Web端应用
+
+| 文件 | 说明 |
+|------|------|
+| `index.html` | 主页面HTML结构，包含侧边栏、对话区、设置面板等UI元素 |
+| `app.js` | 核心程序文件，包含UI逻辑、API调用、状态管理、工作流引擎、对话管理等全部业务逻辑 |
+| `config.js` | 配置文件，定义模型配置、系统提示词、工作流配置、UI参数等全局常量 |
+| `styles.css` | 样式文件，定义深色/浅色主题、响应式布局、动画效果等 |
+| `memory.js` | 增强记忆系统，实现上下文管理、长期记忆、语义搜索等功能 |
+| `secrets.js` | API密钥配置文件（本地文件，不上传Git），存储MiMo、DeepSeek等API Key |
+| `secrets.js.example` | API密钥配置模板，供其他开发者参考使用 |
+| `dev-server.mjs` | 开发服务器，提供本地HTTP服务和热重载功能 |
+| `package.json` | Web端依赖配置，定义启动脚本 |
+| `README.md` | Web端说明文档 |
+
+### electron-app/ - Electron桌面端
+
+| 文件 | 说明 |
+|------|------|
+| `main.js` | Electron主进程，负责创建窗口、处理IPC通信、文件系统操作等 |
+| `preload.js` | 预加载脚本，通过contextBridge安全暴露electronAPI给渲染进程 |
+| `index.html` | 桌面端页面HTML结构 |
+| `app.js` | 桌面端核心程序，包含桌面端特有的功能和逻辑 |
+| `config.js` | 桌面端配置文件 |
+| `styles.css` | 桌面端样式文件 |
+| `memory.js` | 桌面端记忆系统 |
+| `secrets.js` | API密钥配置文件（本地文件，不上传Git） |
+| `secrets.js.example` | API密钥配置模板 |
+| `package.json` | Electron依赖配置，定义构建脚本和应用元数据 |
+| `package-lock.json` | 依赖版本锁定文件 |
+| `icon.ico` | 应用图标文件 |
+| `logo.png` | 应用Logo图片 |
+| `build.bat` | Windows构建脚本，用于打包安装程序 |
+| `dev.bat` | Windows开发启动脚本 |
+| `.gitignore` | 桌面端Git忽略规则 |
+| `README.md` | 桌面端说明文档 |
+| `DEVELOPMENT.md` | 桌面端开发指南 |
+| `QUICKSTART.md` | 桌面端快速开始指南 |
+
+### mobile-app/ - Capacitor移动端
+
+| 文件 | 说明 |
+|------|------|
+| `capacitor.config.json` | Capacitor配置文件，定义应用ID、名称、服务器地址等 |
+| `package.json` | 移动端依赖配置，包含Capacitor核心和插件依赖 |
+| `package-lock.json` | 依赖版本锁定文件 |
+| `run-android.bat` | Android运行脚本 |
+| `setup-android.bat` | Android环境配置脚本 |
+| `.gitignore` | 移动端Git忽略规则 |
+| `README.md` | 移动端说明文档 |
+| `DEVELOPMENT.md` | 移动端开发指南 |
+| `QUICKSTART.md` | 移动端快速开始指南 |
+| `www/` | Web资源目录，存放前端代码 |
+| `android/` | Android原生项目目录，由Capacitor自动生成 |
+
+#### mobile-app/www/ - 移动端Web资源
+
+| 文件 | 说明 |
+|------|------|
+| `index.html` | 移动端页面HTML结构 |
+| `app.js` | 移动端核心程序 |
+| `config.js` | 移动端配置文件 |
+| `styles.css` | 移动端样式文件 |
+| `memory.js` | 移动端记忆系统 |
+| `secrets.js` | API密钥配置文件（本地文件，不上传Git） |
+| `secrets.js.example` | API密钥配置模板 |
+| `mobile.js` | Capacitor桥接文件，封装原生API（相机、文件系统、分享、震动等） |
+| `logo.png` | 移动端Logo图片 |
 
 ## 快速开始
 
@@ -398,7 +445,7 @@ MIT License
 
 ## 项目维护
 
-- **版本**: 1.0.0
+- **版本**: 1.1.0
 - **最后更新**: 2026-05-22
 
 ---
