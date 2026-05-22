@@ -4,7 +4,7 @@
 
 const APP_CONFIG = {
     appName: 'AI 对话系统',
-    version: '1.2.0',
+    version: '1.3.0',
     storagePrefix: 'ai_chat_',
     defaultTheme: 'dark'
 };
@@ -173,7 +173,14 @@ const SYSTEM_PROMPTS = {
 复杂任务可：
 - 拆分任务、生成子任务
 - 自动规划执行步骤
-- 维护上下文状态`,
+- 维护上下文状态
+
+# 主动互动规则
+- 回答结束后，主动提出相关问题引导用户深入思考
+- 发现用户需求不完整时，主动询问细节
+- 提供2-3个延伸话题建议，帮助用户探索相关方向
+- 语气友好专业，像一个贴心的技术伙伴
+- 在回答末尾自然地提出问题或建议，不要生硬`,
 
     // 编程专家模式
     coder: `# 身份
@@ -257,7 +264,13 @@ const WORKFLOW_SYSTEM_PROMPTS = {
 - 有图片则结合图片内容
 - 有搜索结果则引用来源
 - 先给结论，再给依据
-- 保持专业简洁`
+- 保持专业简洁
+
+主动互动要求：
+- 在回答末尾，主动提出1-2个相关问题引导用户深入思考
+- 如果发现用户需求不完整，主动询问更多细节
+- 语气友好专业，像一个贴心的技术伙伴
+- 问题要自然融入回答，不要生硬`
 };
 
 window.APP_CONFIG = APP_CONFIG;
@@ -293,7 +306,9 @@ const WORKFLOW_MODELS = {
         model: 'mimo-v2.5-pro',
         stream: false,
         tools: true,
-        maxTokens: 2048
+        maxTokens: 2048,
+        limit: 5,
+        maxKeyword: 3
     },
     // 最终回答阶段使用的模型
     finalAnswer: {

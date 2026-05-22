@@ -310,8 +310,21 @@ const AppState = {
     messages: [],
     // 所有对话历史
     chatHistory: {},
-    // 长期记忆
-    longTermMemory: [],
+    // 长期记忆（分两类：共用记忆 + 对话记忆）
+    longTermMemory: {
+        shared: { content: '', updatedAt: null },  // 共用记忆：AI整合后的完整文章
+        conversations: {}                           // 对话记忆：每个对话独立 { chatId: { content, updatedAt } }
+    },
+    // 用户画像（自动分析生成）
+    userProfile: {
+        name: '',           // 称呼
+        role: '',           // 身份/职业
+        interests: [],      // 兴趣领域
+        style: '',          // 交流风格
+        level: '',          // 技术水平
+        topics: {},         // 话题统计 {topic: count}
+        lastUpdated: null   // 最后更新时间
+    },
     // API配置
     apiConfig: {},
     // 记忆配置
@@ -673,6 +686,7 @@ async function initApp() {
     // 预加载已保存的生成图片到内存缓存
     await ImageStore.preloadAll(AppState.chatHistory);
     loadLongTermMemory();
+    loadUserProfile(); // 加载用户画像
     initNewChat();
     bindEventListeners();
     renderHistoryList();
@@ -783,9 +797,25 @@ function loadChatHistory() {
  * 加载长期记忆
  */
 function loadLongTermMemory() {
-    const savedMemory = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'long_term_memory');
-    if (savedMemory) {
-        AppState.longTermMemory = savedMemory;
+    const saved = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'long_term_memory');
+    if (!saved) return;
+
+    // 旧格式迁移（数组格式 -> 新的对象格式）
+    if (Array.isArray(saved)) {
+        AppState.longTermMemory = {
+            shared: { content: '', updatedAt: null },
+            conversations: {}
+        };
+        // 将旧记忆合并到共用记忆
+        if (saved.length > 0) {
+            const oldContents = saved.map(m => m.content).filter(Boolean);
+            AppState.longTermMemory.shared.content = oldContents.join('；');
+            AppState.longTermMemory.shared.updatedAt = new Date().toISOString();
+            console.log(`[Memory] 迁移了 ${saved.length} 条旧记忆到共用记忆`);
+        }
+        saveLongTermMemory();
+    } else {
+        AppState.longTermMemory = saved;
     }
 }
 
@@ -840,6 +870,7 @@ function initNewChat() {
     renderChatMessages();
     renderHistoryList();
     updateContextInfo();
+    syncWorkflowUIForCurrentChat();
 }
 
 /**
@@ -917,6 +948,17 @@ function bindEventListeners() {
         saveWorkflowEditor();
     });
 
+    // 记忆管理
+    document.getElementById('memoryManagerBtn')?.addEventListener('click', () => {
+        toggleMemoryManager();
+    });
+    document.getElementById('closeMemoryManagerBtn')?.addEventListener('click', () => {
+        closeMemoryManager();
+    });
+    document.getElementById('clearMemoryBtn')?.addEventListener('click', () => {
+        clearAllMemoryItems();
+    });
+
     // 关闭侧边栏
     document.getElementById('closeSidebarBtn')?.addEventListener('click', closeSidebar);
     document.getElementById('sidebarOverlay')?.addEventListener('click', closeSidebar);
@@ -929,7 +971,7 @@ function bindEventListeners() {
 
     // 打开记忆模态框（PC 端）
     document.getElementById('memoryBtn').addEventListener('click', () => {
-        renderMemoryModal();
+        renderMemoryList();
         openModal('memoryModal');
     });
     // 打开记忆模态框（移动端）
@@ -966,7 +1008,7 @@ function bindEventListeners() {
     document.getElementById('saveApiBtn').addEventListener('click', saveApiConfig);
 
     // 保存记忆配置
-    document.getElementById('saveMemoryBtn').addEventListener('click', saveMemoryConfig);
+    document.getElementById('saveMemorySettingsBtn')?.addEventListener('click', saveMemoryConfig);
 
     // 头像设置
     document.getElementById('saveAvatarBtn').addEventListener('click', saveAvatarConfig);
@@ -1003,7 +1045,7 @@ function bindEventListeners() {
     document.getElementById('clearAllDataBtn')?.addEventListener('click', clearAllData);
 
     // 清除记忆
-    document.getElementById('clearMemoryBtn').addEventListener('click', clearAllMemory);
+    document.getElementById('clearMemorySettingsBtn')?.addEventListener('click', clearAllMemoryItems);
 
     // 导出记忆
     document.getElementById('exportMemoryBtn').addEventListener('click', exportMemory);
@@ -1113,6 +1155,21 @@ async function handleSendMessage() {
 
     // 执行工作流（传递保存的图片数据）
     await executeWorkflow(content, hasImage, AppState.currentChatId, imageDataForWorkflow);
+
+    // 工作流执行完成后，提取并保存记忆
+    await checkAndSummarizeContext();
+}
+
+/**
+ * 更新加载消息内容
+ */
+function updateLoadingMessage(chatMessages, content, isCurrentChat) {
+    const lastMsg = chatMessages[chatMessages.length - 1];
+    if (lastMsg && lastMsg.isLoading) {
+        lastMsg.content = content;
+        lastMsg.isLoading = false;
+    }
+    if (isCurrentChat) renderChatMessages();
 }
 
 /**
@@ -1162,7 +1219,9 @@ async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
     const inDegree = new Array(stepCount).fill(0);
     const successors = new Array(stepCount).fill(null).map(() => []);
     connections.forEach(conn => {
-        if (conn.from < stepCount && conn.to < stepCount) {
+        if (conn.from >= 0 && conn.from < stepCount &&
+            conn.to >= 0 && conn.to < stepCount &&
+            conn.from !== conn.to) {
             inDegree[conn.to]++;
             successors[conn.from].push(conn.to);
         }
@@ -1201,6 +1260,7 @@ async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
 
             if (ready.length === 0) {
                 console.warn('[Workflow] 存在循环依赖或无法执行的步骤');
+                updateLoadingMessage(chatMessages, '工作流配置存在循环依赖，执行已终止。请检查工作流连线配置。', isCurrentChat);
                 break;
             }
 
@@ -1271,11 +1331,13 @@ async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
                 }
             }));
 
-            // 更新入度：已执行/跳过的步骤的后继节点入度减 1
-            for (const idx of [...completed, ...skipped]) {
-                successors[idx].forEach(succ => {
-                    inDegree[succ]--;
-                });
+            // 更新入度：本轮执行/跳过的步骤的后继节点入度减 1
+            for (const stepIndex of ready) {
+                if (completed.has(stepIndex) || skipped.has(stepIndex)) {
+                    successors[stepIndex].forEach(succ => {
+                        inDegree[succ]--;
+                    });
+                }
             }
         }
 
@@ -1298,12 +1360,7 @@ async function executeWorkflow(userInput, hasImage, chatId, imageData = null) {
         if (hasApiKey('deepseek')) {
             await generateDirectAnswer(userInput, chatId);
         } else {
-            const lastMsg = chatMessages[chatMessages.length - 1];
-            if (lastMsg) {
-                lastMsg.content = '工作流执行失败';
-                lastMsg.isLoading = false;
-            }
-            if (isCurrentChat) renderChatMessages();
+            updateLoadingMessage(chatMessages, `工作流执行失败：${error.message || '未知错误'}`, isCurrentChat);
         }
     } finally {
         workflowState.isRunning = false;
@@ -1344,7 +1401,7 @@ async function executeIntentStep(stepConfig, workflowState, context) {
     WORKFLOW_MODELS.intentAnalysis.maxTokens = stepConfig.maxTokens;
 
     try {
-        const result = await analyzeIntentWithDeepSeek(context.userInput);
+        const result = await analyzeIntentWithDeepSeek(context.userInput, context.chatId);
         console.log('[Workflow] 意图识别结果:', result);
         workflowState.results.intent = result;
     } catch (error) {
@@ -1384,6 +1441,8 @@ async function executeSearchStep(stepConfig, workflowState, context) {
     const origModels = { ...WORKFLOW_MODELS.webSearch };
     WORKFLOW_MODELS.webSearch.model = stepConfig.model;
     WORKFLOW_MODELS.webSearch.maxTokens = stepConfig.maxTokens;
+    WORKFLOW_MODELS.webSearch.limit = stepConfig.limit;
+    WORKFLOW_MODELS.webSearch.maxKeyword = stepConfig.maxKeyword;
 
     try {
         const keywords = workflowState.results.intent?.keywords || [];
@@ -1432,19 +1491,45 @@ async function executeAnswerStep(stepConfig, workflowState, context) {
 }
 
 /**
- * 进行意图识别
+ * 进行意图识别（带历史上下文）
+ * @param {string} userInput - 用户输入
+ * @param {string} chatId - 对话ID（用于获取历史上下文）
  */
-async function analyzeIntentWithDeepSeek(userInput) {
+async function analyzeIntentWithDeepSeek(userInput, chatId) {
     const intentConfig = WORKFLOW_MODELS.intentAnalysis;
     const isMiMo = intentConfig.model.startsWith('mimo-');
 
     // 根据模型选择配置
     const config = isMiMo ? AppState.apiConfig.mimo : AppState.apiConfig.deepseek;
 
-    const contextMessages = [
-        { role: 'system', content: WORKFLOW_SYSTEM_PROMPTS.intentAnalysis },
-        { role: 'user', content: userInput }
-    ];
+    // 注入当前时间、用户画像、记忆到系统提示词
+    const now = new Date();
+    const timeStr = now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const profilePrompt = getUserProfilePrompt();
+    const memoryPrompt = getMemoryPrompt();
+    const systemPrompt = WORKFLOW_SYSTEM_PROMPTS.intentAnalysis
+        + `\n\n当前系统时间：${timeStr}。请根据时间判断用户问题是否具有时效性（如新闻、股价、天气、赛事结果等），如果是时效性问题，必须设置 needSearch 为 true。`
+        + profilePrompt
+        + memoryPrompt;
+
+    // 构建历史上下文（最近5条消息，用于理解对话连贯性）
+    const contextMessages = [{ role: 'system', content: systemPrompt }];
+    if (chatId) {
+        const chatMessages = AppState.chatHistory[chatId]?.messages || AppState.messages;
+        const recentMessages = chatMessages.slice(-5); // 最近5条消息
+        for (const msg of recentMessages) {
+            if (msg.role === 'user' || msg.role === 'assistant') {
+                let content = msg.content;
+                if (Array.isArray(content)) {
+                    content = content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+                }
+                if (content && !msg.isLoading) {
+                    contextMessages.push({ role: msg.role, content });
+                }
+            }
+        }
+    }
+    contextMessages.push({ role: 'user', content: userInput });
 
     // 获取模型参数（思考模式下mimo-v2.5-pro和mimo-v2.5不支持自定义temperature）
     const isThinking = intentConfig.thinking === true;
@@ -1864,7 +1949,13 @@ async function generateImageWithGPT(prompt, chatId) {
 }
 
 /**
- * 生成最终回答
+ * 生成最终回答（工业级分层上下文架构）
+ *
+ * 上下文结构：
+ * 1. System Prompt（系统层）- 身份、规则、时间
+ * 2. Workflow Context（工作流层）- 意图、搜索、图片识别结果
+ * 3. Recent Messages（会话层）- 最近历史消息
+ * 4. Current Input（当前输入）- 用户当前问题 + 工作流结果
  */
 async function generateFinalAnswer(userInput, chatId) {
     const finalAnswerConfig = WORKFLOW_MODELS.finalAnswer;
@@ -1873,47 +1964,41 @@ async function generateFinalAnswer(userInput, chatId) {
     const chatMessages = AppState.chatHistory[chatId]?.messages || AppState.messages;
     const workflowState = getWorkflowState(chatId);
 
-    // 使用数组构建上下文，避免多次字符串拼接
-    const contextParts = [`用户问题：${userInput}`];
+    // ========== 层1：系统提示词 ==========
+    const now = new Date();
+    const timeStr = now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const profilePrompt = getUserProfilePrompt();
+    const memoryPrompt = getMemoryPrompt();
+    const finalSystemPrompt = WORKFLOW_SYSTEM_PROMPTS.finalAnswer + `\n\n当前系统时间：${timeStr}。` + profilePrompt + memoryPrompt;
 
-    if (workflowState.results.imageDescription) {
-        contextParts.push(`图片内容：${workflowState.results.imageDescription}`);
-    }
-
-    if (workflowState.results.searchResults) {
-        contextParts.push(`搜索结果：${workflowState.results.searchResults}`);
-    }
-
-    // 添加搜索链接信息
-    if (workflowState.results.searchLinks && workflowState.results.searchLinks.length > 0) {
-        const linksInfo = workflowState.results.searchLinks
-            .map((r, i) => `[${i + 1}] ${r.title} - ${r.url}`)
-            .join('\n');
-        contextParts.push(`参考来源：\n${linksInfo}`);
-    }
-
-    if (workflowState.results.generatedImage) {
-        contextParts.push('已为用户生成图片，请在回答中说明。');
-    }
-
-    // 添加关闭步骤的信息
-    if (workflowState.results.disabledSteps && workflowState.results.disabledSteps.length > 0) {
-        contextParts.push(`注意：以下功能已关闭，无法使用：${workflowState.results.disabledSteps.join('、')}。请在回答中告知用户这些功能已关闭，如需使用请前往工作流管理中开启。`);
-    }
-
+    // ========== 层2：工作流上下文 ==========
+    const workflowParts = [];
     if (workflowState.results.intent) {
-        contextParts.push(`意图分析：${JSON.stringify(workflowState.results.intent)}`);
+        workflowParts.push(`【意图分析】${workflowState.results.intent.summary || workflowState.results.intent.intent}`);
     }
+    if (workflowState.results.imageDescription) {
+        workflowParts.push(`【图片内容】${workflowState.results.imageDescription}`);
+    }
+    if (workflowState.results.searchResults) {
+        workflowParts.push(`【搜索结果】${workflowState.results.searchResults}`);
+    }
+    if (workflowState.results.searchLinks && workflowState.results.searchLinks.length > 0) {
+        const linksInfo = workflowState.results.searchLinks.map((r, i) => `[${i + 1}] ${r.title} - ${r.url}`).join('\n');
+        workflowParts.push(`【参考来源】\n${linksInfo}`);
+    }
+    if (workflowState.results.generatedImage) {
+        workflowParts.push('【图片生成】已为用户生成图片');
+    }
+    if (workflowState.results.disabledSteps && workflowState.results.disabledSteps.length > 0) {
+        workflowParts.push(`【已关闭功能】${workflowState.results.disabledSteps.join('、')}`);
+    }
+    const workflowContext = workflowParts.length > 0 ? workflowParts.join('\n') : '';
 
-    const context = contextParts.join('\n\n');
-
-    // 构建消息上下文（排除最后一条用户消息，因为我们会用增强版本替代）
+    // ========== 层3：历史会话（最近10条） ==========
     const contextMessages = [];
     const messagesToInclude = chatMessages.slice(0, -1); // 排除最后一条用户消息
-    const maxContext = MEMORY_CONFIG.maxContextMessages || 50;
-
-    // 预分配数组大小，减少动态扩展
-    const startIdx = Math.max(0, messagesToInclude.length - maxContext);
+    const recentCount = 10; // 最近10条消息
+    const startIdx = Math.max(0, messagesToInclude.length - recentCount);
     for (let i = startIdx; i < messagesToInclude.length; i++) {
         const msg = messagesToInclude[i];
         if (msg.role === 'user' || msg.role === 'assistant') {
@@ -1921,17 +2006,24 @@ async function generateFinalAnswer(userInput, chatId) {
             if (Array.isArray(content)) {
                 content = content.filter(item => item.type === 'text').map(item => item.text).join('\n');
             }
-            if (content) {
+            if (content && !msg.isLoading) {
                 contextMessages.push({ role: msg.role, content });
             }
         }
     }
 
-    // 添加系统提示词和增强的用户消息
+    // ========== 层4：当前用户输入（增强版） ==========
+    const currentInput = [`用户问题：${userInput}`];
+    if (workflowContext) {
+        currentInput.push(`\n工作流分析结果：\n${workflowContext}`);
+    }
+    const enhancedUserInput = currentInput.join('\n');
+
+    // ========== 组装最终消息 ==========
     const finalMessages = [
-        { role: 'system', content: WORKFLOW_SYSTEM_PROMPTS.finalAnswer },
+        { role: 'system', content: finalSystemPrompt },
         ...contextMessages,
-        { role: 'user', content: context }
+        { role: 'user', content: enhancedUserInput }
     ];
 
     // 获取模型参数（思考模式下mimo-v2.5-pro和mimo-v2.5不支持自定义temperature）
@@ -2000,13 +2092,20 @@ async function generateDirectAnswer(userInput, chatId) {
         }
     }
 
+    // 注入当前时间到系统提示词
+    const now = new Date();
+    const timeStr = now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const profilePrompt = getUserProfilePrompt();
+    const memoryPrompt = getMemoryPrompt();
+    const systemPrompt = SYSTEM_PROMPTS.default + `\n\n当前系统时间：${timeStr}。` + profilePrompt + memoryPrompt;
+
     const finalMessages = [
-        { role: 'system', content: SYSTEM_PROMPTS.default },
+        { role: 'system', content: systemPrompt },
         ...contextMessages
     ];
 
     // 获取模型参数（思考模式下mimo-v2.5-pro和mimo-v2.5不支持自定义temperature）
-    const modelParams = getModelParams(WORKFLOW_MODELS.finalAnswer.model, true);
+    const modelParams = getModelParams(WORKFLOW_MODELS.finalAnswer.model, WORKFLOW_MODELS.finalAnswer.thinking !== false);
 
     const requestBody = {
         model: WORKFLOW_MODELS.finalAnswer.model,
@@ -2018,6 +2117,87 @@ async function generateDirectAnswer(userInput, chatId) {
     };
 
     await streamResponse(requestBody, config, chatId);
+}
+
+/**
+ * 生成话题建议（异步版本，调用API生成）
+ */
+async function generateTopicSuggestions(chatMessages) {
+    try {
+        // 获取最近的对话
+        const recentMessages = chatMessages.slice(-6);
+        let lastUserQ = '';
+        let lastAiA = '';
+
+        for (const msg of recentMessages) {
+            let content = msg.content;
+            if (Array.isArray(content)) {
+                content = content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+            }
+            if (!content || msg.isLoading) continue;
+            if (msg.role === 'user') lastUserQ = content;
+            if (msg.role === 'assistant') lastAiA = content;
+        }
+
+        if (!lastUserQ || !lastAiA) return [];
+
+        // 截断过长内容
+        if (lastUserQ.length > 300) lastUserQ = lastUserQ.substring(0, 300) + '...';
+        if (lastAiA.length > 800) lastAiA = lastAiA.substring(0, 800) + '...';
+
+        // 调用API生成话题建议
+        const config = AppState.apiConfig.deepseek;
+        if (!config || !config.apiKey) return [];
+
+        const prompt = `根据以下对话，生成3个用户下一步可能想问的问题。要求：
+1. 问题要与当前对话内容紧密相关
+2. 问题要自然、合理，像真实用户会问的
+3. 每个问题不超过20个字
+4. 只输出3个问题，用换行分隔，不要编号
+
+用户问题：${lastUserQ}
+
+AI回答：${lastAiA}
+
+3个后续问题：`;
+
+        const response = await fetch(config.endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-v4-flash',
+                messages: [
+                    { role: 'system', content: '你是一个对话分析专家，负责预测用户下一步可能的问题。只输出问题，不要其他内容。' },
+                    { role: 'user', content: prompt }
+                ],
+                max_tokens: 150,
+                temperature: 0.5,
+                stream: false
+            })
+        });
+
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        const result = data.choices?.[0]?.message?.content?.trim();
+
+        if (!result) return [];
+
+        // 解析返回的问题
+        const suggestions = result
+            .split('\n')
+            .map(s => s.replace(/^\d+[\.\)、]\s*/, '').trim())
+            .filter(s => s.length > 0 && s.length <= 30)
+            .slice(0, 3);
+
+        return suggestions;
+    } catch (error) {
+        console.error('[TopicSuggestion] 生成话题建议失败:', error);
+        return [];
+    }
 }
 
 /**
@@ -2261,8 +2441,15 @@ async function streamResponse(requestBody, config, chatId, searchLinks = []) {
             }
         }
 
+        // 生成话题建议（调用API）
+        const topicSuggestions = await generateTopicSuggestions(chatMessages);
+        chatMessages[chatMessages.length - 1].topicSuggestions = topicSuggestions;
+
+        // 强制重新渲染（包括话题建议）
         if (isCurrentChat) {
             renderChatMessages();
+            // 滚动到底部以显示话题建议
+            setTimeout(() => scrollToBottom(), 100);
         }
 
     } catch (error) {
@@ -2370,80 +2557,262 @@ function updateWorkflowUI(step, status, chatId) {
 }
 
 /**
- * 获取相关长期记忆
+ * 检查并生成上下文摘要（异步，调用AI总结）
  */
-function getRelevantMemories() {
-    // 简单实现：返回最近的记忆
-    // 实际应用中可以使用向量相似度等更复杂的方法
-    return AppState.longTermMemory
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-        .slice(0, 5);
-}
-
-/**
- * 检查并生成上下文摘要
- */
-function checkAndSummarizeContext() {
+async function checkAndSummarizeContext() {
     if (!AppState.memoryConfig.autoSummarize) return;
 
-    const threshold = AppState.memoryConfig.summaryThreshold || 30;
-    if (AppState.messages.length >= threshold) {
-        generateContextSummary();
-    }
+    // 自动分析用户画像（调用AI）
+    await analyzeUserProfile();
 
-    // 使用增强记忆系统提取重要信息
-    if (typeof memoryManager !== 'undefined' && memoryManager.constructor.name === 'MemoryManager') {
-        try {
-            memoryManager.extractFromConversation(AppState.messages);
-        } catch (error) {
-            console.error('[Memory] 提取记忆失败:', error);
-        }
+    // 每次对话结束后，调用AI总结对话内容并保存为长久记忆
+    await summarizeConversationWithAI();
+
+    // 如果记忆管理界面正在显示，刷新界面
+    const memoryManager = document.getElementById('memoryManager');
+    if (memoryManager && memoryManager.style.display !== 'none') {
+        renderMemoryManager();
     }
 }
 
 /**
- * 生成上下文摘要并保存到长期记忆
+ * 使用AI总结对话内容并保存到长期记忆
  */
-function generateContextSummary() {
-    // 提取重要信息
-    const recentMessages = AppState.messages.slice(-10);
-    const importantTopics = extractImportantTopics(recentMessages);
+async function summarizeConversationWithAI() {
+    try {
+        // 获取当前对话的消息（从chatHistory中获取，确保是正确的对话）
+        const chatId = AppState.currentChatId;
+        const chatMessages = AppState.chatHistory[chatId]?.messages || AppState.messages;
+        const recentMessages = chatMessages.slice(-10);
 
-    if (importantTopics.length > 0) {
-        const memory = {
-            id: 'memory_' + Date.now(),
-            content: importantTopics.join('；'),
-            timestamp: new Date().toISOString(),
-            chatId: AppState.currentChatId
-        };
+        // 过滤有效消息（用户和AI的回复，排除loading消息）
+        const validMessages = recentMessages.filter(msg =>
+            (msg.role === 'user' || msg.role === 'assistant') && !msg.isLoading
+        );
 
-        AppState.longTermMemory.push(memory);
-
-        // 限制长期记忆数量
-        const maxMemories = AppState.memoryConfig.maxLongTermMemories || 100;
-        if (AppState.longTermMemory.length > maxMemories) {
-            AppState.longTermMemory = AppState.longTermMemory.slice(-maxMemories);
+        if (validMessages.length < 1) {
+            console.log('[Memory] 对话消息不足，跳过总结');
+            return;
         }
 
-        saveLongTermMemory();
+        // 构建对话内容
+        const conversation = validMessages
+            .map(msg => {
+                let content = msg.content;
+                if (Array.isArray(content)) {
+                    content = content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+                }
+                // 截断过长的内容
+                if (content && content.length > 500) {
+                    content = content.substring(0, 500) + '...';
+                }
+                return `${msg.role === 'user' ? '用户' : 'AI'}：${content}`;
+            })
+            .join('\n');
+
+        if (!conversation.trim() || conversation.length < 10) {
+            console.log('[Memory] 对话内容过短，跳过总结');
+            return;
+        }
+
+        // 构建总结请求
+        const summaryPrompt = `请将以下对话总结成一句话（20-50字），提取关键信息（用户需求、技术问题、重要决定等）。只输出总结，不要其他内容。
+
+对话：
+${conversation}
+
+一句话总结：`;
+
+        // 调用API进行总结
+        const config = AppState.apiConfig.deepseek;
+        if (!config || !config.apiKey) {
+            console.log('[Memory] DeepSeek API Key 未配置，跳过总结');
+            return;
+        }
+
+        console.log('[Memory] 正在调用AI总结对话...');
+
+        const response = await fetch(config.endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-v4-flash',
+                messages: [
+                    { role: 'system', content: '你是一个记忆提取专家，负责从对话中提取关键信息并生成简洁的一句话总结。' },
+                    { role: 'user', content: summaryPrompt }
+                ],
+                max_tokens: 100,
+                temperature: 0.3,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            console.error('[Memory] API请求失败:', response.status);
+            return;
+        }
+
+        const data = await response.json();
+        const summary = data.choices?.[0]?.message?.content?.trim();
+
+        console.log('[Memory] AI总结结果:', summary);
+
+        if (summary && summary.length >= 10) {
+            // 确保 conversations 对象存在
+            if (!AppState.longTermMemory.conversations) {
+                AppState.longTermMemory.conversations = {};
+            }
+
+            // 保存到对话记忆（按chatId独立存储）
+            const chatId = AppState.currentChatId;
+            AppState.longTermMemory.conversations[chatId] = {
+                content: summary,
+                updatedAt: new Date().toISOString()
+            };
+
+            saveLongTermMemory();
+            console.log('[Memory] 对话记忆已保存:', summary);
+
+            // 触发整合共用记忆
+            await consolidateSharedMemory();
+        } else {
+            console.log('[Memory] AI总结内容过短或为空，跳过保存');
+        }
+    } catch (error) {
+        console.error('[Memory] AI总结失败:', error);
     }
 }
 
 /**
- * 提取重要话题
+ * 整合共用记忆
+ * 将所有对话记忆整合成一篇连贯的用户档案，去重合并
+ */
+async function consolidateSharedMemory() {
+    try {
+        const conversations = AppState.longTermMemory.conversations || {};
+        const allContents = Object.values(conversations).map(c => c.content).filter(Boolean);
+
+        if (allContents.length === 0) return;
+
+        // 如果只有1条对话记忆，直接作为共用记忆
+        if (allContents.length === 1) {
+            AppState.longTermMemory.shared = {
+                content: allContents[0],
+                updatedAt: new Date().toISOString()
+            };
+            saveLongTermMemory();
+            return;
+        }
+
+        // 调用AI整合多条对话记忆
+        const config = AppState.apiConfig.deepseek;
+        if (!config || !config.apiKey) {
+            console.log('[Memory] DeepSeek API Key 未配置，跳过整合');
+            return;
+        }
+
+        const existingShared = AppState.longTermMemory.shared?.content || '';
+
+        const prompt = `请将以下多段对话记忆整合成一篇连贯的用户档案，要求：
+1. 去除重复信息
+2. 合并相关内容
+3. 保持简洁，200-500字
+4. 按主题分类（如：用户信息、技术偏好、项目经历、交流习惯等）
+5. 保留所有有价值的信息，不要丢失细节
+
+${existingShared ? `现有用户档案：\n${existingShared}\n\n` : ''}对话记忆：
+${allContents.map((c, i) => `[${i+1}] ${c}`).join('\n')}
+
+整合后的用户档案：`;
+
+        console.log('[Memory] 正在整合共用记忆...');
+
+        const response = await fetch(config.endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-v4-flash',
+                messages: [
+                    { role: 'system', content: '你是一个记忆整合专家，负责将多段对话记忆整合成一篇连贯、无重复的用户档案。' },
+                    { role: 'user', content: prompt }
+                ],
+                max_tokens: 800,
+                temperature: 0.3,
+                stream: false
+            })
+        });
+
+        if (!response.ok) {
+            console.error('[Memory] 整合共用记忆API请求失败:', response.status);
+            return;
+        }
+
+        const data = await response.json();
+        const result = data.choices?.[0]?.message?.content?.trim();
+
+        if (result && result.length >= 20) {
+            AppState.longTermMemory.shared = {
+                content: result,
+                updatedAt: new Date().toISOString()
+            };
+            saveLongTermMemory();
+            console.log('[Memory] 共用记忆已整合完成');
+        }
+    } catch (error) {
+        console.error('[Memory] 整合共用记忆失败:', error);
+    }
+}
+
+/**
+ * 提取重要话题（增强版 - 识别个人信息）
  */
 function extractImportantTopics(messages) {
     const topics = [];
+    const personalInfoPatterns = [
+        { pattern: /我[叫是]([^\s,，。.!?！？]{1,20})/, type: 'name', template: (m) => `用户叫"${m[1]}"` },
+        { pattern: /我的名字[是叫]([^\s,，。.!?！？]{1,20})/, type: 'name', template: (m) => `用户名字是"${m[1]}"` },
+        { pattern: /称呼我[为]([^\s,，。.!?！？]{1,20})/, type: 'name', template: (m) => `用户希望被称呼为"${m[1]}"` },
+        { pattern: /我是[一]?[个名]?([^，。,.\s]{2,15})[工程师|开发者|设计师|经理|学生|老师|医生]/, type: 'role', template: (m) => `用户是${m[0].replace('我', '').replace('是', '')}` },
+        { pattern: /我在([^，。\s]{2,20})[工作|上班|学习]/, type: 'work', template: (m) => `用户在${m[1]}工作/学习` },
+        { pattern: /我喜欢([^，。,.\s]{2,30})/, type: 'preference', template: (m) => `用户喜欢${m[1]}` },
+        { pattern: /我不喜欢([^，。,.\s]{2,30})/, type: 'preference', template: (m) => `用户不喜欢${m[1]}` },
+        { pattern: /我[擅长会用]([^，。,.\s]{2,30})/, type: 'skill', template: (m) => `用户${m[0].substring(0, 2)}${m[1]}` },
+    ];
 
-    messages.forEach(msg => {
-        if (msg.role === 'user' && msg.content.length > 20) {
-            // 提取用户问题的核心内容
-            const summary = msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : '');
-            topics.push(summary);
+    // 分析最近的用户消息
+    const recentUserMessages = messages.filter(m => m.role === 'user').slice(-5);
+
+    for (const msg of recentUserMessages) {
+        if (!msg.content || typeof msg.content !== 'string') continue;
+
+        for (const { pattern, template } of personalInfoPatterns) {
+            const match = msg.content.match(pattern);
+            if (match) {
+                const topic = template(match);
+                if (!topics.includes(topic)) {
+                    topics.push(topic);
+                }
+            }
         }
-    });
+    }
 
-    return topics.slice(0, 3); // 最多返回3个话题
+    // 如果没有匹配到个人信息模式，使用原有的简单提取
+    if (topics.length === 0) {
+        messages.forEach(msg => {
+            if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length > 20) {
+                const summary = msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : '');
+                topics.push(summary);
+            }
+        });
+    }
+
+    return topics.slice(0, 5); // 最多返回5个话题
 }
 
 /**
@@ -2541,6 +2910,7 @@ function renderChatMessages() {
                         ${roleName ? `<span class="message-role">${roleName}</span>` : ''}
                     </div>
                     <div class="message-body">${content}
+                        ${!isUser && msg.topicSuggestions ? renderTopicSuggestions(msg.topicSuggestions) : ''}
                         <div class="message-footer">
                             <div class="message-actions">
                                 <button class="btn-message-action btn-copy" data-index="${index}" title="复制">
@@ -2569,6 +2939,37 @@ function renderChatMessages() {
 
     // 滚动到底部
     scrollToBottom();
+}
+
+/**
+ * 渲染话题建议
+ */
+function renderTopicSuggestions(suggestions) {
+    if (!suggestions || suggestions.length === 0) return '';
+
+    const suggestionsHtml = suggestions.map(suggestion =>
+        `<button class="topic-suggestion-btn" onclick="handleTopicSuggestion(this)" data-text="${escapeHtml(suggestion)}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            ${escapeHtml(suggestion)}
+        </button>`
+    ).join('');
+
+    return `<div class="topic-suggestions">${suggestionsHtml}</div>`;
+}
+
+/**
+ * 处理话题建议点击
+ */
+function handleTopicSuggestion(btn) {
+    const text = btn.dataset.text;
+    if (text) {
+        DOM.messageInput.value = text;
+        DOM.messageInput.focus();
+        autoResizeTextarea();
+        updateCharCount();
+    }
 }
 
 /**
@@ -2633,6 +3034,21 @@ function updateLastMessageContent(messages) {
         contentEl.innerHTML = html;
         // 使用requestAnimationFrame优化滚动
         requestAnimationFrame(() => scrollToBottom());
+    }
+
+    // 更新话题建议（如果有的话）
+    const existingSuggestions = messageBody.querySelector('.topic-suggestions');
+    if (lastMsg.topicSuggestions && lastMsg.topicSuggestions.length > 0 && !existingSuggestions) {
+        const suggestionsHtml = renderTopicSuggestions(lastMsg.topicSuggestions);
+        const footer = messageBody.querySelector('.message-footer');
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = suggestionsHtml;
+        const suggestionsEl = tempDiv.firstElementChild;
+        if (footer) {
+            messageBody.insertBefore(suggestionsEl, footer);
+        } else {
+            messageBody.appendChild(suggestionsEl);
+        }
     }
 }
 
@@ -3493,17 +3909,40 @@ function deleteSelectedChats() {
 
     const count = AppState.selectedChats.size;
     if (confirm(`确定要删除选中的 ${count} 个对话吗？`)) {
+        let needNewChat = false;
+
         AppState.selectedChats.forEach(chatId => {
+            // 如果对话正在生成中，先中止
+            if (AppState.generatingChats.has(chatId)) {
+                AppState.generatingChats.get(chatId).abort();
+                AppState.generatingChats.delete(chatId);
+            }
+
             delete AppState.chatHistory[chatId];
-            // 如果删除的是当前对话，重置为新对话
+
+            // 清理工作流状态
+            WorkflowStateMap.delete(chatId);
+
+            // 同步删除对话记忆
+            if (AppState.longTermMemory.conversations?.[chatId]) {
+                delete AppState.longTermMemory.conversations[chatId];
+            }
+
+            // 标记需要新建对话
             if (chatId === AppState.currentChatId) {
-                initNewChat();
+                needNewChat = true;
             }
         });
 
         AppState.selectedChats.clear();
         AppState.selectMode = false;
+        saveLongTermMemory();
         saveChatHistory();
+
+        // 循环结束后统一处理
+        if (needNewChat) {
+            initNewChat();
+        }
         renderHistoryList();
         showToast(`已删除 ${count} 个对话`, 'success');
     }
@@ -3520,7 +3959,21 @@ function clearAllChats() {
     }
 
     if (confirm(`确定要清空所有 ${count} 个对话吗？此操作不可恢复！`)) {
+        // 中止所有正在生成的对话
+        AppState.generatingChats.forEach((controller, chatId) => {
+            controller.abort();
+        });
+        AppState.generatingChats.clear();
+
         AppState.chatHistory = {};
+
+        // 清理所有工作流状态
+        WorkflowStateMap.clear();
+
+        // 清空对话记忆（保留共用记忆）
+        AppState.longTermMemory.conversations = {};
+        saveLongTermMemory();
+
         saveChatHistory();
         initNewChat();
         renderHistoryList();
@@ -3723,7 +4176,23 @@ function updateWorkflowUIForChat(chatId) {
  */
 function deleteChat(chatId) {
     if (confirm('确定要删除这个对话吗？')) {
+        // 如果对话正在生成中，先中止
+        if (AppState.generatingChats.has(chatId)) {
+            AppState.generatingChats.get(chatId).abort();
+            AppState.generatingChats.delete(chatId);
+        }
+
         delete AppState.chatHistory[chatId];
+
+        // 清理工作流状态
+        WorkflowStateMap.delete(chatId);
+
+        // 同步删除对话记忆
+        if (AppState.longTermMemory.conversations?.[chatId]) {
+            delete AppState.longTermMemory.conversations[chatId];
+            saveLongTermMemory();
+        }
+
         saveChatHistory();
 
         // 如果删除的是当前对话，创建新对话
@@ -3785,60 +4254,6 @@ function saveMemoryConfig() {
     );
 
     showToast(ERROR_MESSAGES.saveSuccess, 'success');
-}
-
-/**
- * 清除所有记忆
- */
-function clearAllMemory() {
-    if (confirm('确定要清除所有长期记忆吗？此操作不可撤销。')) {
-        AppState.longTermMemory = [];
-        saveLongTermMemory();
-        renderMemoryModal();
-        showToast('所有记忆已清除', 'success');
-    }
-}
-
-/**
- * 渲染记忆模态框
- */
-function renderMemoryModal() {
-    DOM.currentMessageCount.textContent = AppState.messages.length;
-    DOM.longTermMemoryCount.textContent = AppState.longTermMemory.length;
-
-    DOM.memoryItems.innerHTML = AppState.longTermMemory
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-        .map(memory => `
-            <div class="memory-item">
-                <button class="memory-item-delete" data-memory-id="${memory.id}" title="删除记忆">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-                ${memory.content}
-                <div class="memory-item-time">${formatDate(memory.timestamp)}</div>
-            </div>
-        `
-        ).join('');
-
-    // 绑定删除事件
-    document.querySelectorAll('.memory-item-delete').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const memoryId = btn.dataset.memoryId;
-            deleteMemory(memoryId);
-        });
-    });
-}
-
-/**
- * 删除单条记忆
- */
-function deleteMemory(memoryId) {
-    AppState.longTermMemory = AppState.longTermMemory.filter(m => m.id !== memoryId);
-    saveLongTermMemory();
-    renderMemoryModal();
-    showToast(ERROR_MESSAGES.deleteSuccess, 'success');
 }
 
 /**
@@ -3978,7 +4393,9 @@ function updateStorageStats() {
         chatCountEl.textContent = Object.keys(AppState.chatHistory).length;
     }
     if (memoryCountEl) {
-        memoryCountEl.textContent = AppState.longTermMemory.length;
+        const memory = AppState.longTermMemory;
+        const conversationCount = Object.keys(memory.conversations || {}).length;
+        memoryCountEl.textContent = conversationCount + (memory.shared?.content ? 1 : 0);
     }
 }
 
@@ -4131,7 +4548,17 @@ async function applyImportedData(data) {
 
     // 恢复数据
     if (data.chatHistory) AppState.chatHistory = data.chatHistory;
-    if (data.longTermMemory) AppState.longTermMemory = data.longTermMemory;
+    if (data.longTermMemory) {
+        // 兼容旧格式（数组格式）
+        if (Array.isArray(data.longTermMemory)) {
+            AppState.longTermMemory = {
+                shared: { content: data.longTermMemory.map(m => m.content).filter(Boolean).join('；'), updatedAt: new Date().toISOString() },
+                conversations: {}
+            };
+        } else {
+            AppState.longTermMemory = data.longTermMemory;
+        }
+    }
     if (data.apiConfig) AppState.apiConfig = data.apiConfig;
     if (data.memoryConfig) AppState.memoryConfig = data.memoryConfig;
     if (data.customModels) AppState.customModels = data.customModels;
@@ -4164,9 +4591,18 @@ async function clearAllData() {
         return;
     }
 
+    // 中止所有正在生成的对话
+    AppState.generatingChats.forEach((controller) => {
+        controller.abort();
+    });
+    AppState.generatingChats.clear();
+
     // 清除状态
     AppState.chatHistory = {};
-    AppState.longTermMemory = [];
+    AppState.longTermMemory = {
+        shared: { content: '', updatedAt: null },
+        conversations: {}
+    };
     AppState.apiConfig = JSON.parse(JSON.stringify(DEFAULT_API_CONFIG));
     AppState.memoryConfig = JSON.parse(JSON.stringify(MEMORY_CONFIG));
     AppState.customModels = [];
@@ -4174,6 +4610,11 @@ async function clearAllData() {
         enabled: DEEPSEEK_THINKING_CONFIG.enabled,
         reasoningEffort: DEEPSEEK_THINKING_CONFIG.reasoningEffort
     };
+    AppState.selectedChats.clear();
+    AppState.selectMode = false;
+
+    // 清理工作流状态
+    WorkflowStateMap.clear();
 
     // 清除本地存储
     localStorage.clear();
@@ -4323,10 +4764,12 @@ function toggleThinkingOptions(step, model) {
  */
 function toggleWorkflowManager() {
     const workflowManager = document.getElementById('workflowManager');
+    const memoryManager = document.getElementById('memoryManager');
     const chatContainer = document.getElementById('chatContainer');
     const inputArea = document.querySelector('.input-area');
 
     if (workflowManager.style.display === 'none') {
+        memoryManager.style.display = 'none'; // 关闭记忆管理
         workflowManager.style.display = 'flex';
         chatContainer.style.display = 'none';
         inputArea.style.display = 'none';
@@ -5278,6 +5721,380 @@ function saveWorkflowEditor() {
     }
 }
 
+// ============ 用户记忆管理 ============
+
+/**
+ * 切换记忆管理界面
+ */
+function toggleMemoryManager() {
+    const memoryManager = document.getElementById('memoryManager');
+    const workflowManager = document.getElementById('workflowManager');
+    const chatContainer = document.getElementById('chatContainer');
+    const inputArea = document.querySelector('.input-area');
+
+    if (memoryManager.style.display === 'none') {
+        workflowManager.style.display = 'none'; // 关闭工作流管理
+        memoryManager.style.display = 'flex';
+        chatContainer.style.display = 'none';
+        inputArea.style.display = 'none';
+        renderMemoryManager();
+        closeSidebar();
+    } else {
+        closeMemoryManager();
+    }
+}
+
+/**
+ * 关闭记忆管理界面
+ */
+function closeMemoryManager() {
+    const memoryManager = document.getElementById('memoryManager');
+    const chatContainer = document.getElementById('chatContainer');
+    const inputArea = document.querySelector('.input-area');
+
+    memoryManager.style.display = 'none';
+    chatContainer.style.display = '';
+    inputArea.style.display = '';
+}
+
+/**
+ * 渲染记忆管理界面
+ */
+function renderMemoryManager() {
+    renderUserProfile();
+    renderMemoryList();
+}
+
+/**
+ * 渲染用户画像
+ */
+function renderUserProfile() {
+    const profile = AppState.userProfile;
+    document.getElementById('profileName').textContent = profile.name || '待分析';
+    document.getElementById('profileRole').textContent = profile.role || '待分析';
+    document.getElementById('profileInterests').textContent = profile.interests?.length > 0 ? profile.interests.join('、') : '待分析';
+    document.getElementById('profileStyle').textContent = profile.style || '待分析';
+    document.getElementById('profileLevel').textContent = profile.level || '待分析';
+}
+
+/**
+ * 自动分析用户画像（基于对话历史）
+ */
+async function analyzeUserProfile() {
+    try {
+        // 收集所有对话的消息
+        const allChatMessages = Object.values(AppState.chatHistory)
+            .flatMap(chat => chat.messages || []);
+        // 合并当前对话的消息
+        const allMessages = [...allChatMessages, ...AppState.messages];
+        if (allMessages.length < 3) return; // 需要足够的对话数据
+
+        // 提取用户消息
+        const userMessages = allMessages
+            .filter(m => m.role === 'user' && m.content && typeof m.content === 'string')
+            .slice(-20) // 最近20条用户消息
+            .map(m => m.content);
+
+        if (userMessages.length < 3) return;
+
+        // 调用API分析用户画像
+        const config = AppState.apiConfig.deepseek;
+        if (!config || !config.apiKey) return;
+
+        const conversationSample = userMessages.slice(0, 10).join('\n');
+
+        const prompt = `分析以下用户消息，推断用户画像。返回JSON格式：
+{
+  "name": "用户可能的称呼（如果消息中有提到名字则提取，否则为空字符串）",
+  "role": "用户可能的身份/职业（如：学生、前端工程师、产品经理等）",
+  "interests": ["兴趣领域1", "兴趣领域2"],
+  "style": "交流风格（如：简洁直接、详细深入、好奇探索等）",
+  "level": "技术水平（如：初学者、中级、高级、专家）"
+}
+
+用户消息：
+${conversationSample}
+
+JSON：`;
+
+        const response = await fetch(config.endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-v4-flash',
+                messages: [
+                    { role: 'system', content: '你是一个用户画像分析专家。根据用户的消息推断其身份、兴趣、风格和水平。只输出JSON，不要其他内容。' },
+                    { role: 'user', content: prompt }
+                ],
+                max_tokens: 200,
+                temperature: 0.3,
+                stream: false
+            })
+        });
+
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const result = data.choices?.[0]?.message?.content?.trim();
+
+        if (!result) return;
+
+        // 解析JSON
+        try {
+            const profileData = JSON.parse(result);
+
+            // 更新用户画像（保留旧数据作为备份）
+            AppState.userProfile = {
+                name: profileData.name || AppState.userProfile.name,
+                role: profileData.role || AppState.userProfile.role,
+                interests: profileData.interests || AppState.userProfile.interests,
+                style: profileData.style || AppState.userProfile.style,
+                level: profileData.level || AppState.userProfile.level,
+                topics: AppState.userProfile.topics || {},
+                lastUpdated: new Date().toISOString()
+            };
+
+            saveUserProfileToStorage();
+            console.log('[Profile] 用户画像已更新:', AppState.userProfile);
+        } catch (e) {
+            console.error('[Profile] 解析用户画像失败:', e);
+        }
+    } catch (error) {
+        console.error('[Profile] 分析用户画像失败:', error);
+    }
+}
+
+/**
+ * 渲染记忆列表
+ */
+function renderMemoryList() {
+    const container = document.getElementById('memoryList');
+    const countEl = document.getElementById('memoryCount');
+    const memory = AppState.longTermMemory || { shared: { content: '' }, conversations: {} };
+    const conversations = memory.conversations || {};
+    const conversationCount = Object.keys(conversations).length;
+
+    countEl.textContent = conversationCount + (memory.shared?.content ? 1 : 0);
+
+    // 共用记忆
+    const sharedHtml = memory.shared?.content
+        ? `<div class="memory-item memory-shared-item">
+                <div class="memory-item-label">用户档案（共用记忆）</div>
+                <div class="memory-item-content">${escapeHtml(memory.shared.content)}</div>
+                <div class="memory-item-meta">
+                    <span>${memory.shared.updatedAt ? formatDate(memory.shared.updatedAt) : ''}</span>
+                    <div class="memory-item-actions">
+                        <button class="btn-memory-edit" onclick="editSharedMemory()">编辑</button>
+                    </div>
+                </div>
+            </div>`
+        : '<div class="memory-empty-hint">暂无共用记忆，系统会在多轮对话后自动整合</div>';
+
+    // 对话记忆
+    const conversationEntries = Object.entries(conversations)
+        .sort(([, a], [, b]) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+    const conversationsHtml = conversationEntries.length > 0
+        ? conversationEntries.map(([chatId, data]) => {
+            const chatTitle = AppState.chatHistory[chatId]?.title || chatId;
+            return `<div class="memory-item" data-chat-id="${chatId}">
+                    <div class="memory-item-label">${escapeHtml(chatTitle)}</div>
+                    <div class="memory-item-content">${escapeHtml(data.content)}</div>
+                    <div class="memory-item-meta">
+                        <span>${formatDate(data.updatedAt)}</span>
+                        <div class="memory-item-actions">
+                            <button class="btn-memory-edit" onclick="editConversationMemory('${chatId}')">编辑</button>
+                            <button class="btn-memory-delete" onclick="deleteConversationMemoryItem('${chatId}')">删除</button>
+                        </div>
+                    </div>
+                </div>`;
+        }).join('')
+        : '<div class="memory-empty-hint">暂无对话记忆，系统会在对话结束后自动提取</div>';
+
+    container.innerHTML = `
+        <div class="memory-section">
+            <div class="memory-section-title">共用记忆</div>
+            ${sharedHtml}
+        </div>
+        <div class="memory-section">
+            <div class="memory-section-title">对话记忆 (${conversationEntries.length})</div>
+            ${conversationsHtml}
+        </div>
+    `;
+}
+
+/**
+ * 编辑共用记忆
+ */
+function editSharedMemory() {
+    const memory = AppState.longTermMemory;
+    if (!memory?.shared) return;
+
+    const item = document.querySelector('.memory-shared-item');
+    if (!item) return;
+
+    const contentEl = item.querySelector('.memory-item-content');
+    const originalContent = memory.shared.content;
+
+    contentEl.innerHTML = `
+        <textarea class="memory-edit-textarea" rows="8">${escapeHtml(originalContent)}</textarea>
+        <div class="form-actions" style="margin-top: 8px;">
+            <button class="btn-save-memory" onclick="saveSharedMemoryEdit()">保存</button>
+            <button class="btn-cancel-memory" onclick="renderMemoryList()">取消</button>
+        </div>
+    `;
+}
+
+/**
+ * 保存共用记忆编辑
+ */
+function saveSharedMemoryEdit() {
+    const textarea = document.querySelector('.memory-edit-textarea');
+    if (!textarea) return;
+
+    const newContent = textarea.value.trim();
+    if (!newContent) {
+        showToast('记忆内容不能为空', 'error');
+        return;
+    }
+
+    AppState.longTermMemory.shared = {
+        content: newContent,
+        updatedAt: new Date().toISOString()
+    };
+    saveLongTermMemory();
+    renderMemoryList();
+    showToast('共用记忆已更新', 'success');
+}
+
+/**
+ * 编辑对话记忆
+ */
+function editConversationMemory(chatId) {
+    const memory = AppState.longTermMemory.conversations?.[chatId];
+    if (!memory) return;
+
+    const item = document.querySelector(`.memory-item[data-chat-id="${chatId}"]`);
+    if (!item) return;
+
+    const contentEl = item.querySelector('.memory-item-content');
+    const originalContent = memory.content;
+
+    contentEl.innerHTML = `
+        <textarea class="memory-edit-textarea" rows="6">${escapeHtml(originalContent)}</textarea>
+        <div class="form-actions" style="margin-top: 8px;">
+            <button class="btn-save-memory" onclick="saveConversationMemoryEdit('${chatId}')">保存</button>
+            <button class="btn-cancel-memory" onclick="renderMemoryList()">取消</button>
+        </div>
+    `;
+}
+
+/**
+ * 保存对话记忆编辑
+ */
+function saveConversationMemoryEdit(chatId) {
+    const textarea = document.querySelector('.memory-edit-textarea');
+    if (!textarea) return;
+
+    const newContent = textarea.value.trim();
+    if (!newContent) {
+        showToast('记忆内容不能为空', 'error');
+        return;
+    }
+
+    if (AppState.longTermMemory.conversations?.[chatId]) {
+        AppState.longTermMemory.conversations[chatId].content = newContent;
+        AppState.longTermMemory.conversations[chatId].updatedAt = new Date().toISOString();
+        saveLongTermMemory();
+        renderMemoryList();
+        showToast('对话记忆已更新', 'success');
+    }
+}
+
+/**
+ * 删除对话记忆
+ */
+function deleteConversationMemoryItem(chatId) {
+    if (!confirm('确定要删除这条对话记忆吗？')) return;
+    if (AppState.longTermMemory.conversations) {
+        delete AppState.longTermMemory.conversations[chatId];
+        saveLongTermMemory();
+        renderMemoryList();
+        showToast('对话记忆已删除', 'success');
+    }
+}
+
+/**
+ * 清空所有记忆
+ */
+function clearAllMemoryItems() {
+    if (!confirm('确定要清空所有记忆吗？此操作不可撤销。')) return;
+    AppState.longTermMemory = {
+        shared: { content: '', updatedAt: null },
+        conversations: {}
+    };
+    saveLongTermMemory();
+    renderMemoryList();
+    showToast('所有记忆已清空', 'success');
+}
+
+/**
+ * 保存用户画像到存储
+ */
+function saveUserProfileToStorage() {
+    StorageAdapter.saveSync(APP_CONFIG.storagePrefix + 'user_profile', AppState.userProfile);
+}
+
+/**
+ * 加载用户画像
+ */
+function loadUserProfile() {
+    const saved = StorageAdapter.loadSync(APP_CONFIG.storagePrefix + 'user_profile');
+    if (saved) {
+        AppState.userProfile = saved;
+    }
+}
+
+/**
+ * 获取用户画像提示词（注入到系统提示词中）
+ */
+function getUserProfilePrompt() {
+    const profile = AppState.userProfile;
+    const parts = [];
+    if (profile.name) parts.push(`称呼：${profile.name}`);
+    if (profile.role) parts.push(`身份：${profile.role}`);
+    if (profile.interests?.length > 0) parts.push(`兴趣领域：${profile.interests.join('、')}`);
+    if (profile.style) parts.push(`交流风格：${profile.style}`);
+    if (profile.level) parts.push(`技术水平：${profile.level}`);
+    return parts.length > 0 ? `\n\n【用户画像】\n${parts.join('\n')}` : '';
+}
+
+/**
+ * 获取长久记忆提示词（注入到系统提示词中）
+ */
+function getMemoryPrompt() {
+    const memory = AppState.longTermMemory;
+    if (!memory) return '';
+
+    const parts = [];
+
+    // 共用记忆（用户档案）
+    if (memory.shared?.content) {
+        parts.push(`【用户档案】\n${memory.shared.content}`);
+    }
+
+    // 当前对话记忆
+    const chatId = AppState.currentChatId;
+    if (chatId && memory.conversations?.[chatId]?.content) {
+        parts.push(`【当前对话记忆】\n${memory.conversations[chatId].content}`);
+    }
+
+    return parts.length > 0 ? `\n\n${parts.join('\n\n')}` : '';
+}
+
 /**
  * 获取默认工作流配置
  */
@@ -5620,79 +6437,3 @@ document.addEventListener('DOMContentLoaded', initApp);
 
 // ============ 智能体相关工具函数 ============
 
-/**
- * 获取记忆统计
- */
-function getMemoryStats() {
-    if (typeof memoryManager === 'undefined') {
-        return { available: false };
-    }
-
-    return {
-        available: true,
-        ...memoryManager.getStats()
-    };
-}
-
-/**
- * 搜索记忆
- */
-function searchMemory(query, limit = 5) {
-    if (typeof memoryManager === 'undefined') {
-        return [];
-    }
-
-    return memoryManager.getRelevant(query, limit);
-}
-
-/**
- * 清空所有记忆
- */
-function clearAllMemories() {
-    if (typeof memoryManager !== 'undefined') {
-        memoryManager.clearAll();
-    }
-
-    // 同时清空原有的长期记忆
-    AppState.longTermMemory = [];
-    saveLongTermMemory();
-
-    showToast('所有记忆已清空', 'info');
-}
-
-/**
- * 导出记忆数据
- */
-function exportMemories() {
-    if (typeof memoryManager === 'undefined') {
-        return null;
-    }
-
-    return memoryManager.exportAll();
-}
-
-/**
- * 导入记忆数据
- */
-function importMemories(data) {
-    if (typeof memoryManager === 'undefined') {
-        return false;
-    }
-
-    try {
-        memoryManager.importAll(data);
-        showToast('记忆数据导入成功', 'info');
-        return true;
-    } catch (error) {
-        console.error('[Memory] 导入记忆失败:', error);
-        showToast('记忆数据导入失败', 'error');
-        return false;
-    }
-}
-
-// 将工具函数暴露到全局
-window.getMemoryStats = getMemoryStats;
-window.searchMemory = searchMemory;
-window.clearAllMemories = clearAllMemories;
-window.exportMemories = exportMemories;
-window.importMemories = importMemories;

@@ -50,6 +50,13 @@
                 </svg>
                 <span>工作流管理</span>
             </button>
+            <button class="btn-memory-manager" id="memoryManagerBtn" title="用户记忆管理">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path>
+                    <path d="M12 6v6l4 2"></path>
+                </svg>
+                <span>记忆管理</span>
+            </button>
         </div>
         <div class="history-list" id="historyList">
             <!-- 历史对话列表将动态生成 -->
@@ -142,218 +149,113 @@
 
         <!-- 工作流管理界面 -->
         <div class="workflow-manager" id="workflowManager" style="display: none;">
-            <div class="workflow-manager-header">
-                <h2>工作流管理</h2>
-                <button class="btn-close-workflow-manager" id="closeWorkflowManagerBtn">&times;</button>
+            <!-- 视图1：工作流列表 -->
+            <div id="workflowListView">
+                <div class="workflow-manager-header">
+                    <h2>工作流管理</h2>
+                    <button class="btn-close-workflow-manager" id="closeWorkflowManagerBtn">&times;</button>
+                </div>
+                <div class="workflow-manager-content">
+                    <div class="workflow-section">
+                        <h3>官方工作流</h3>
+                        <div id="officialWorkflowList" class="workflow-list"></div>
+                    </div>
+                    <div class="workflow-section">
+                        <div class="section-header">
+                            <h3>我的工作流</h3>
+                            <button class="btn-create-workflow" id="createWorkflowBtn">+ 新建工作流</button>
+                        </div>
+                        <div id="userWorkflowList" class="workflow-list"></div>
+                    </div>
+                </div>
             </div>
-            <div class="workflow-manager-content">
-                <!-- 工作流步骤配置 -->
-                <div class="workflow-section">
-                    <h3>工作流步骤</h3>
-                    <div class="workflow-steps-config">
-                        <div class="workflow-step-config" data-step="intent">
-                            <div class="step-header">
-                                <span class="step-number">1</span>
-                                <span class="step-name">意图识别</span>
-                                <label class="step-toggle">
-                                    <input type="checkbox" id="stepIntentEnabled" checked>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="step-details">
-                                <div class="config-row">
-                                    <label>模型</label>
-                                    <select id="stepIntentModel" onchange="toggleThinkingOptions('intent', this.value)">
-                                        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-                                        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
-                                        <option value="mimo-v2.5">MiMo v2.5</option>
-                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
-                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
-                                    </select>
-                                </div>
-                                <div class="config-row" id="intentThinkingRow">
-                                    <label>深度思考</label>
-                                    <select id="stepIntentThinking">
-                                        <option value="false">关闭</option>
-                                        <option value="true">开启</option>
-                                    </select>
-                                </div>
-                                <div class="config-row" id="intentReasoningRow">
-                                    <label>推理强度</label>
-                                    <select id="stepIntentReasoning">
-                                        <option value="low">低</option>
-                                        <option value="medium" selected>中</option>
-                                        <option value="high">高</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>最大Token</label>
-                                    <input type="number" id="stepIntentMaxTokens" value="512" min="256" max="2048" step="256">
-                                </div>
-                            </div>
-                        </div>
 
-                        <div class="workflow-step-config" data-step="image">
-                            <div class="step-header">
-                                <span class="step-number">2</span>
-                                <span class="step-name">图片识别</span>
-                                <label class="step-toggle">
-                                    <input type="checkbox" id="stepImageEnabled" checked>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="step-details">
-                                <div class="config-row">
-                                    <label>模型</label>
-                                    <select id="stepImageModel">
-                                        <option value="mimo-v2.5">MiMo v2.5</option>
-                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>最大Token</label>
-                                    <input type="number" id="stepImageMaxTokens" value="1024" min="512" max="4096" step="512">
-                                </div>
-                            </div>
+            <!-- 视图2：工作流编辑器 -->
+            <div id="workflowEditorView" style="display: none;">
+                <div class="workflow-manager-header">
+                    <div class="editor-header-left">
+                        <button class="btn-back-workflow" id="backToListBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                            返回
+                        </button>
+                        <h2 id="editorTitle">新建工作流</h2>
+                    </div>
+                    <div class="editor-meta-inline">
+                        <input type="text" id="workflowName" placeholder="工作流名称" maxlength="30">
+                        <input type="text" id="workflowDesc" placeholder="描述（可选）" maxlength="100">
+                    </div>
+                    <div class="editor-actions">
+                        <button class="btn-cancel-workflow" id="cancelEditBtn">取消</button>
+                        <button class="btn-save-workflow" id="saveWorkflowBtn">保存</button>
+                    </div>
+                </div>
+                <div class="workflow-canvas-wrapper">
+                    <div class="workflow-canvas" id="workflowCanvas">
+                        <svg class="workflow-connections" id="workflowConnections"></svg>
+                        <div class="workflow-nodes" id="workflowNodes"></div>
+                    </div>
+                    <div class="workflow-sidebar" id="workflowSidebar">
+                        <div class="sidebar-section">
+                            <h4>添加节点</h4>
+                            <div id="availableStepsPanel" class="available-steps-panel"></div>
                         </div>
-
-                        <div class="workflow-step-config" data-step="search">
-                            <div class="step-header">
-                                <span class="step-number">3</span>
-                                <span class="step-name">联网搜索</span>
-                                <label class="step-toggle">
-                                    <input type="checkbox" id="stepSearchEnabled" checked>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="step-details">
-                                <div class="config-row">
-                                    <label>模型</label>
-                                    <select id="stepSearchModel">
-                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
-                                        <option value="mimo-v2.5">MiMo v2.5</option>
-                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
-                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>最大结果数</label>
-                                    <input type="number" id="stepSearchLimit" value="5" min="1" max="15">
-                                </div>
-                                <div class="config-row">
-                                    <label>最大关键词</label>
-                                    <input type="number" id="stepSearchMaxKeyword" value="3" min="1" max="5">
-                                </div>
-                                <div class="config-row">
-                                    <label>最大Token</label>
-                                    <input type="number" id="stepSearchMaxTokens" value="2048" min="1024" max="8192" step="1024">
-                                </div>
-                            </div>
+                        <div class="sidebar-section" id="nodeConfigPanel" style="display:none;">
+                            <h4>节点配置</h4>
+                            <div id="nodeConfigContent"></div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-                        <div class="workflow-step-config" data-step="generate">
-                            <div class="step-header">
-                                <span class="step-number">4</span>
-                                <span class="step-name">图片生成</span>
-                                <label class="step-toggle">
-                                    <input type="checkbox" id="stepGenerateEnabled" checked>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="step-details">
-                                <div class="config-row">
-                                    <label>模型</label>
-                                    <select id="stepGenerateModel">
-                                        <option value="gpt-image-2">GPT-Image-2</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>图片尺寸</label>
-                                    <select id="stepGenerateSize">
-                                        <option value="1024x1024">1024x1024 (标准)</option>
-                                        <option value="1792x1024">1792x1024 (横版)</option>
-                                        <option value="1024x1792">1024x1792 (竖版)</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>图片质量</label>
-                                    <select id="stepGenerateQuality">
-                                        <option value="standard">标准</option>
-                                        <option value="hd">高清</option>
-                                    </select>
-                                </div>
-                            </div>
+        <!-- 用户记忆管理界面 -->
+        <div class="memory-manager" id="memoryManager" style="display: none;">
+            <div class="memory-manager-header">
+                <h2>记忆管理</h2>
+                <button class="btn-close-memory-manager" id="closeMemoryManagerBtn">&times;</button>
+            </div>
+            <div class="memory-manager-content">
+                <!-- 用户画像 -->
+                <div class="memory-section">
+                    <div class="section-header">
+                        <h3>用户画像</h3>
+                        <span class="profile-auto-tag">自动分析</span>
+                    </div>
+                    <div id="userProfileCard" class="user-profile-card">
+                        <div class="profile-field">
+                            <label>称呼</label>
+                            <span id="profileName">分析中...</span>
                         </div>
-
-                        <div class="workflow-step-config" data-step="answer">
-                            <div class="step-header">
-                                <span class="step-number">5</span>
-                                <span class="step-name">生成回答</span>
-                                <label class="step-toggle">
-                                    <input type="checkbox" id="stepAnswerEnabled" checked disabled>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="step-details">
-                                <div class="config-row">
-                                    <label>模型</label>
-                                    <select id="stepAnswerModel" onchange="toggleThinkingOptions('answer', this.value)">
-                                        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-                                        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-                                        <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
-                                        <option value="mimo-v2.5">MiMo v2.5</option>
-                                        <option value="mimo-v2-pro">MiMo v2 Pro</option>
-                                        <option value="mimo-v2-omni">MiMo v2 Omni</option>
-                                    </select>
-                                </div>
-                                <div class="config-row" id="answerThinkingRow">
-                                    <label>深度思考</label>
-                                    <select id="stepAnswerThinking">
-                                        <option value="true" selected>开启</option>
-                                        <option value="false">关闭</option>
-                                    </select>
-                                </div>
-                                <div class="config-row" id="answerReasoningRow">
-                                    <label>推理强度</label>
-                                    <select id="stepAnswerReasoning">
-                                        <option value="low">低</option>
-                                        <option value="medium" selected>中</option>
-                                        <option value="high">高</option>
-                                    </select>
-                                </div>
-                                <div class="config-row">
-                                    <label>最大Token</label>
-                                    <input type="number" id="stepAnswerMaxTokens" value="4096" min="1024" max="16384" step="1024">
-                                </div>
-                            </div>
+                        <div class="profile-field">
+                            <label>身份</label>
+                            <span id="profileRole">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>兴趣领域</label>
+                            <span id="profileInterests">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>交流风格</label>
+                            <span id="profileStyle">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>技术水平</label>
+                            <span id="profileLevel">分析中...</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- 提示词配置 -->
-                <div class="workflow-section">
-                    <h3>提示词配置</h3>
-                    <div class="prompt-configs">
-                        <div class="prompt-config">
-                            <label>意图识别提示词</label>
-                            <textarea id="promptIntent" rows="4" placeholder="输入意图识别提示词..."></textarea>
-                        </div>
-                        <div class="prompt-config">
-                            <label>图片识别提示词</label>
-                            <textarea id="promptImage" rows="4" placeholder="输入图片识别提示词..."></textarea>
-                        </div>
-                        <div class="prompt-config">
-                            <label>最终回答提示词</label>
-                            <textarea id="promptAnswer" rows="4" placeholder="输入最终回答提示词..."></textarea>
+                <!-- 长久记忆 -->
+                <div class="memory-section">
+                    <div class="section-header">
+                        <h3>长久记忆 <span class="memory-count" id="memoryCount">0</span></h3>
+                        <div class="memory-actions">
+                            <button class="btn-clear-memory" id="clearMemoryBtn">清空全部</button>
                         </div>
                     </div>
-                </div>
-
-                <!-- 操作按钮 -->
-                <div class="workflow-actions">
-                    <button class="btn-save-workflow" id="saveWorkflowBtn">保存配置</button>
-                    <button class="btn-reset-workflow" id="resetWorkflowBtn">恢复默认</button>
+                    <div id="memoryList" class="memory-list">
+                        <!-- 记忆列表将动态生成 -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -495,8 +397,8 @@
                             <small>自动压缩过长的上下文</small>
                         </div>
                     </div>
-                    <button class="btn-save" id="saveMemoryBtn">保存记忆设置</button>
-                    <button class="btn-danger" id="clearMemoryBtn">清除所有记忆</button>
+                    <button class="btn-save" id="saveMemorySettingsBtn">保存记忆设置</button>
+                    <button class="btn-danger" id="clearMemorySettingsBtn">清除所有记忆</button>
                 </div>
 
                 <!-- 头像设置面板 -->

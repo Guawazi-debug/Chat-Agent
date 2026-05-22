@@ -50,6 +50,13 @@
                 </svg>
                 <span>工作流管理</span>
             </button>
+            <button class="btn-memory-manager" id="memoryManagerBtn" title="用户记忆管理">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path>
+                    <path d="M12 6v6l4 2"></path>
+                </svg>
+                <span>记忆管理</span>
+            </button>
         </div>
         <div class="history-list" id="historyList">
             <!-- 历史对话列表将动态生成 -->
@@ -201,6 +208,58 @@
             </div>
         </div>
 
+        <!-- 用户记忆管理界面 -->
+        <div class="memory-manager" id="memoryManager" style="display: none;">
+            <div class="memory-manager-header">
+                <h2>记忆管理</h2>
+                <button class="btn-close-memory-manager" id="closeMemoryManagerBtn">&times;</button>
+            </div>
+            <div class="memory-manager-content">
+                <!-- 用户画像 -->
+                <div class="memory-section">
+                    <div class="section-header">
+                        <h3>用户画像</h3>
+                        <span class="profile-auto-tag">自动分析</span>
+                    </div>
+                    <div id="userProfileCard" class="user-profile-card">
+                        <div class="profile-field">
+                            <label>称呼</label>
+                            <span id="profileName">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>身份</label>
+                            <span id="profileRole">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>兴趣领域</label>
+                            <span id="profileInterests">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>交流风格</label>
+                            <span id="profileStyle">分析中...</span>
+                        </div>
+                        <div class="profile-field">
+                            <label>技术水平</label>
+                            <span id="profileLevel">分析中...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 长久记忆 -->
+                <div class="memory-section">
+                    <div class="section-header">
+                        <h3>长久记忆 <span class="memory-count" id="memoryCount">0</span></h3>
+                        <div class="memory-actions">
+                            <button class="btn-clear-memory" id="clearMemoryBtn">清空全部</button>
+                        </div>
+                    </div>
+                    <div id="memoryList" class="memory-list">
+                        <!-- 记忆列表将动态生成 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 输入区域 -->
         <div class="input-area">
             <div class="input-wrapper">
@@ -338,8 +397,8 @@
                             <small>自动压缩过长的上下文</small>
                         </div>
                     </div>
-                    <button class="btn-save" id="saveMemoryBtn">保存记忆设置</button>
-                    <button class="btn-danger" id="clearMemoryBtn">清除所有记忆</button>
+                    <button class="btn-save" id="saveMemorySettingsBtn">保存记忆设置</button>
+                    <button class="btn-danger" id="clearMemorySettingsBtn">清除所有记忆</button>
                 </div>
 
                 <!-- 头像设置面板 -->

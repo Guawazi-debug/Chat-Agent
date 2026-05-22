@@ -418,6 +418,15 @@ body {
     overflow: hidden;
 }
 
+#workflowListView,
+#workflowEditorView {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .workflow-manager-header {
     display: flex;
     align-items: center;
@@ -425,6 +434,7 @@ body {
     padding: 16px 20px;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-secondary);
+    flex-shrink: 0;
 }
 
 .workflow-manager-header h2 {
@@ -452,6 +462,7 @@ body {
 
 .workflow-manager-content {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 20px;
 }
@@ -637,6 +648,18 @@ body {
     border-color: var(--primary-color);
 }
 
+.prompt-config textarea:read-only {
+    background: var(--bg-tertiary);
+    opacity: 0.85;
+    cursor: default;
+}
+
+.workflow-meta input:disabled {
+    background: var(--bg-tertiary);
+    opacity: 0.85;
+    cursor: default;
+}
+
 /* 操作按钮 */
 .workflow-actions {
     display: flex;
@@ -676,6 +699,1182 @@ body {
 .btn-reset-workflow:hover {
     background: var(--border-color);
     color: var(--text-primary);
+}
+
+/* 工作流列表视图 */
+.workflow-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.workflow-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.workflow-card:hover {
+    border-color: var(--primary-color);
+    background: var(--bg-tertiary);
+}
+
+.workflow-card.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px var(--primary-color);
+}
+
+.workflow-card-radio {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border-color);
+    border-radius: 50%;
+    position: relative;
+    transition: all 0.2s;
+}
+
+.workflow-card.active .workflow-card-radio {
+    border-color: var(--primary-color);
+}
+
+.workflow-card.active .workflow-card-radio::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 8px;
+    height: 8px;
+    background: var(--primary-color);
+    border-radius: 50%;
+}
+
+.workflow-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.workflow-card-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.workflow-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workflow-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.workflow-card-steps {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.workflow-card-lock {
+    font-size: 14px;
+    opacity: 0.5;
+}
+
+.workflow-card-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.btn-workflow-edit,
+.btn-workflow-delete {
+    padding: 6px 10px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-workflow-edit:hover {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.btn-workflow-view {
+    padding: 6px 10px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-workflow-view:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+}
+
+.btn-workflow-delete:hover {
+    background: #e74c3c;
+    border-color: #e74c3c;
+    color: white;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.section-header h3 {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+.btn-create-workflow {
+    padding: 6px 14px;
+    background: var(--primary-color);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-create-workflow:hover {
+    opacity: 0.9;
+}
+
+/* 工作流编辑器视图 */
+.editor-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.btn-back-workflow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-back-workflow:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.editor-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-cancel-workflow {
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-cancel-workflow:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.workflow-meta {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.workflow-meta .config-row {
+    margin-bottom: 10px;
+}
+
+.workflow-meta input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.workflow-meta input:focus {
+    border-color: var(--primary-color);
+}
+
+.hint {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-left: 8px;
+}
+
+/* 编辑器步骤列表 */
+.editor-steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 60px;
+}
+
+.editor-step-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    transition: all 0.2s;
+}
+
+.editor-step-card.dragging {
+    opacity: 0.4;
+    background: var(--bg-tertiary);
+}
+
+.editor-step-card.readonly {
+    cursor: default;
+    background: var(--bg-tertiary);
+    opacity: 0.85;
+}
+
+.step-status-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    flex-shrink: 0;
+}
+
+.step-status-badge.enabled {
+    background: rgba(46, 204, 113, 0.15);
+    color: #2ecc71;
+}
+
+.step-status-badge.disabled {
+    background: rgba(149, 165, 166, 0.15);
+    color: #95a5a6;
+}
+
+.editor-step-card .drag-handle {
+    cursor: grab;
+    padding: 2px 4px;
+    color: var(--text-secondary);
+    user-select: none;
+    font-size: 16px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.editor-step-card .drag-handle:active {
+    cursor: grabbing;
+}
+
+.editor-step-card .step-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.editor-step-card .step-name {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    min-width: 80px;
+}
+
+.editor-step-card .step-toggle {
+    flex-shrink: 0;
+}
+
+.btn-step-config-toggle {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.btn-step-config-toggle:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.btn-step-config-toggle.expanded {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.btn-step-remove {
+    padding: 4px 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.btn-step-remove:hover {
+    background: rgba(231, 76, 60, 0.15);
+    color: #e74c3c;
+}
+
+.step-config-panel {
+    width: 100%;
+    padding: 12px 0 0 0;
+    margin-top: 8px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.step-config-panel .config-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.step-config-panel .config-row label {
+    min-width: 70px;
+    font-size: 12px;
+}
+
+.step-config-panel .config-row select,
+.step-config-panel .config-row input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+}
+
+.step-config-panel .config-row select:focus,
+.step-config-panel .config-row input:focus {
+    border-color: var(--primary-color);
+}
+
+/* 可用步骤面板 */
+.available-steps-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.btn-add-step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: var(--bg-secondary);
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-add-step:hover:not(.disabled) {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: var(--bg-tertiary);
+}
+
+.btn-add-step.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 拖放指示器 */
+.drop-indicator {
+    height: 4px;
+    background: var(--primary-color);
+    border-radius: 2px;
+    margin: 2px 0;
+    transition: all 0.15s;
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+/* 空状态提示 */
+.workflow-empty-hint {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* ============ 节点连线式工作流编辑器 ============ */
+
+.editor-meta-inline {
+    display: flex;
+    gap: 8px;
+    flex: 1;
+    margin: 0 16px;
+}
+
+.editor-meta-inline input {
+    padding: 6px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.editor-meta-inline input:focus {
+    border-color: var(--primary-color);
+}
+
+/* 画布容器 */
+.workflow-canvas-wrapper {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.workflow-canvas {
+    flex: 1;
+    position: relative;
+    overflow: auto;
+    background:
+        radial-gradient(circle, var(--border-color) 1px, transparent 1px);
+    background-size: 20px 20px;
+    min-height: 400px;
+    cursor: default;
+}
+
+.workflow-connections {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.workflow-connections path.connection-path {
+    pointer-events: none;
+}
+
+.workflow-connections path[data-conn-index] {
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+.workflow-connections path[data-conn-index]:hover {
+    stroke-width: 8;
+}
+
+.workflow-nodes {
+    position: relative;
+    z-index: 2;
+    min-width: 100%;
+    min-height: 100%;
+}
+
+/* 右侧面板 */
+.workflow-sidebar {
+    width: 240px;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border-color);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 12px;
+}
+
+.workflow-sidebar h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 10px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-section {
+    margin-bottom: 16px;
+}
+
+/* 节点卡片 */
+.workflow-node {
+    position: absolute;
+    width: 200px;
+    background: var(--bg-secondary);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transition: box-shadow 0.2s;
+    user-select: none;
+}
+
+.workflow-node:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+
+.workflow-node.selected {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(var(--primary-color-rgb, 59, 130, 246), 0.3);
+}
+
+.workflow-node.disabled {
+    opacity: 0.6;
+}
+
+/* 节点标题栏 */
+.node-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 8px 8px 0 0;
+    cursor: move;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.node-header .node-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.node-header .node-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.node-header .btn-node-remove {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.node-header .btn-node-remove:hover {
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.1);
+}
+
+/* 节点内容 */
+.node-body {
+    padding: 8px 12px;
+}
+
+.node-model {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.node-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.node-actions .btn-node-toggle,
+.node-actions .btn-node-config {
+    flex: 1;
+    padding: 4px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-node-toggle {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-node-toggle.active {
+    background: rgba(46, 204, 113, 0.15);
+    color: #2ecc71;
+    border-color: #2ecc71;
+}
+
+.btn-node-config {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-node-config:hover,
+.btn-node-toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* 节点端口 */
+.node-ports {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.node-port {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    border: 2px solid var(--border-color);
+    cursor: crosshair;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.node-port:hover {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    transform: scale(1.3);
+}
+
+.node-port.connected {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.port-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    position: absolute;
+    white-space: nowrap;
+}
+
+.port-in .port-label {
+    left: 18px;
+    top: -2px;
+}
+
+.port-out .port-label {
+    right: 18px;
+    top: -2px;
+}
+
+/* 连线临时路径 */
+.workflow-connections .temp-path {
+    stroke: var(--primary-color);
+    stroke-width: 2;
+    stroke-dasharray: 6 4;
+    fill: none;
+    opacity: 0.7;
+}
+
+/* 连线正式路径 */
+.workflow-connections .connection-path {
+    stroke: var(--border-color);
+    stroke-width: 2;
+    fill: none;
+    transition: stroke 0.2s;
+}
+
+.workflow-connections .connection-path.active {
+    stroke: var(--primary-color);
+}
+
+/* 节点配置面板 */
+.node-config-panel {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    border-radius: 0 0 8px 8px;
+}
+
+.node-config-panel .config-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.node-config-panel .config-row label {
+    min-width: 60px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.node-config-panel .config-row select,
+.node-config-panel .config-row input {
+    flex: 1;
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    outline: none;
+}
+
+.node-config-panel .config-row select:focus,
+.node-config-panel .config-row input:focus {
+    border-color: var(--primary-color);
+}
+
+/* ============ 用户记忆管理 ============ */
+
+.btn-memory-manager {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 6px;
+}
+
+.btn-memory-manager:hover {
+    background-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.btn-memory-manager svg {
+    flex-shrink: 0;
+}
+
+/* 记忆管理界面 */
+.memory-manager {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.memory-manager-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+.memory-manager-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.btn-close-memory-manager {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.btn-close-memory-manager:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.memory-manager-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.memory-section {
+    margin-bottom: 24px;
+}
+
+.memory-section h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.memory-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--primary-color);
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.memory-shared-item {
+    border-left: 3px solid var(--primary-color);
+}
+
+.memory-item-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 500;
+}
+
+.memory-section .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.memory-section .section-header h3 {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+/* 用户画像卡片 */
+.user-profile-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.profile-field {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.profile-field:last-child {
+    border-bottom: none;
+}
+
+.profile-field label {
+    min-width: 60px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.profile-field span {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+/* 编辑表单 */
+.profile-edit-form,
+.add-memory-form {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 12px;
+}
+
+.form-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.form-row label {
+    min-width: 60px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.form-row input,
+.form-row textarea {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.form-row input:focus,
+.form-row textarea:focus {
+    border-color: var(--primary-color);
+}
+
+.form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.form-actions button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-save-profile,
+.btn-save-memory {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-save-profile:hover,
+.btn-save-memory:hover {
+    opacity: 0.9;
+}
+
+.btn-cancel-profile,
+.btn-cancel-memory {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.btn-cancel-profile:hover,
+.btn-cancel-memory:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+/* 记忆操作按钮 */
+.memory-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-add-memory {
+    padding: 6px 12px;
+    background: var(--primary-color);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-add-memory:hover {
+    opacity: 0.9;
+}
+
+.btn-clear-memory {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.profile-auto-tag {
+    font-size: 11px;
+    color: var(--primary-color);
+    background: rgba(var(--primary-color-rgb, 59, 130, 246), 0.1);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.btn-clear-memory:hover {
+    background: rgba(231, 76, 60, 0.1);
+    border-color: #e74c3c;
+    color: #e74c3c;
+}
+
+.btn-edit-profile {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-edit-profile:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+/* 记忆列表 */
+.memory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.memory-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px 16px;
+    position: relative;
+    transition: all 0.2s;
+}
+
+.memory-item:hover {
+    border-color: var(--primary-color);
+}
+
+.memory-item-content {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+}
+
+.memory-item-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.memory-item-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.memory-item-actions button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    transition: all 0.2s;
+}
+
+.memory-item-actions button:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.memory-item-actions .btn-memory-delete:hover {
+    color: #e74c3c;
+}
+
+.memory-count {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+}
+
+.memory-empty-hint {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* 记忆编辑框 */
+.memory-edit-textarea {
+    width: 100%;
+    min-height: 100px;
+    padding: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.6;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.memory-edit-textarea:focus {
+    border-color: var(--primary-color);
 }
 
 .sidebar-footer {
@@ -1101,6 +2300,7 @@ body {
     gap: 16px;
     padding: 24px 0;
     animation: messageFadeIn 0.3s ease;
+    position: relative;
 }
 
 @keyframes messageFadeIn {
@@ -1240,6 +2440,43 @@ body {
     margin-top: 0;
 }
 
+/* 话题建议 */
+.topic-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.topic-suggestion-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    line-height: 1.4;
+}
+
+.topic-suggestion-btn:hover {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.topic-suggestion-btn svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
 .message-body {
     position: relative;
     padding: 0;
@@ -1252,7 +2489,6 @@ body {
 
 .message-content-inner {
     /* 内容容器，用于流式更新时保留 footer */
-}
     text-align: left;
 }
 
