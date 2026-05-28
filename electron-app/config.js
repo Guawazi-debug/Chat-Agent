@@ -4,7 +4,7 @@
 
 const APP_CONFIG = {
     appName: 'AI 对话系统',
-    version: '1.3.0',
+    version: '1.4.0',
     storagePrefix: 'ai_chat_',
     defaultTheme: 'dark'
 };
@@ -235,7 +235,9 @@ const WORKFLOW_SYSTEM_PROMPTS = {
 5. 一句话概括需求（summary）
 
 返回格式（严格 JSON）：
-{“intent”:”类型”,”needSearch”:bool,”needImageGeneration”:bool,”imagePrompt”:””,”keywords”:[],”summary”:””}`,
+{"intent":"类型","needSearch":false,"needImageGeneration":false,"imagePrompt":"","keywords":[],"summary":""}
+
+只输出 JSON，不要输出 Markdown 代码块、解释或额外文本。`,
 
     // 图片识别提示词
     imageRecognition: `详细描述图片内容：

@@ -2,19 +2,122 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 
-// 主窗口引用
 let mainWindow;
 
-// 数据存储路径
-const userDataPath = app.getPath('userData');
-const dataFilePath = path.join(userDataPath, 'chat-data.json');
-const imagesDir = path.join(userDataPath, 'images');
+const baseUserDataPath = app.getPath('userData');
+const storageSettingsPath = path.join(baseUserDataPath, 'storage-settings.json');
 const iconPath = path.join(__dirname, 'icon.ico');
-// 确保 images 目录存在
-if (!fs.existsSync(imagesDir)) fs.mkdirSync(imagesDir, { recursive: true });
+
+function ensureDir(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+}
+
+function readStorageSettings() {
+    try {
+        if (!fs.existsSync(storageSettingsPath)) {
+            return {};
+        }
+        const raw = fs.readFileSync(storageSettingsPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        return typeof parsed.customPath === 'string' ? { customPath: path.resolve(parsed.customPath) } : {};
+    } catch (error) {
+        console.error('读取存储配置失败:', error);
+        return {};
+    }
+}
+
+function writeStorageSettings(settings) {
+    try {
+        ensureDir(baseUserDataPath);
+        fs.writeFileSync(storageSettingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    } catch (error) {
+        console.error('写入存储配置失败:', error);
+    }
+}
+
+function getEffectiveDataRoot() {
+    const settings = readStorageSettings();
+    return settings.customPath || baseUserDataPath;
+}
+
+function getDataFilePath(rootPath = getEffectiveDataRoot()) {
+    return path.join(rootPath, 'chat-data.json');
+}
+
+function getImagesDir(rootPath = getEffectiveDataRoot()) {
+    return path.join(rootPath, 'images');
+}
+
+function ensureStorageRoot(rootPath = getEffectiveDataRoot()) {
+    ensureDir(rootPath);
+    ensureDir(getImagesDir(rootPath));
+}
+
+function copyFileIfExists(sourcePath, targetPath) {
+    if (!fs.existsSync(sourcePath)) {
+        return;
+    }
+    ensureDir(path.dirname(targetPath));
+    fs.copyFileSync(sourcePath, targetPath);
+}
+
+function copyDirectoryContents(sourceDir, targetDir) {
+    if (!fs.existsSync(sourceDir)) {
+        return;
+    }
+    ensureDir(targetDir);
+    for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+        const sourcePath = path.join(sourceDir, entry.name);
+        const targetPath = path.join(targetDir, entry.name);
+        // 跳过符号链接，防止循环引用
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+            copyDirectoryContents(sourcePath, targetPath);
+        } else {
+            ensureDir(path.dirname(targetPath));
+            fs.copyFileSync(sourcePath, targetPath);
+        }
+    }
+}
+
+function clearDirectoryContents(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        return;
+    }
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+        const targetPath = path.join(dirPath, entry.name);
+        fs.rmSync(targetPath, { recursive: true, force: true });
+    }
+}
+
+function migrateStorage(sourceRoot, targetRoot) {
+    const normalizedSource = path.resolve(sourceRoot);
+    const normalizedTarget = path.resolve(targetRoot);
+    if (normalizedSource === normalizedTarget) {
+        return;
+    }
+
+    ensureStorageRoot(normalizedSource);
+    ensureStorageRoot(normalizedTarget);
+    copyFileIfExists(getDataFilePath(normalizedSource), getDataFilePath(normalizedTarget));
+    copyDirectoryContents(getImagesDir(normalizedSource), getImagesDir(normalizedTarget));
+}
+
+function hasExistingStorageData(rootPath) {
+    const dataFilePath = getDataFilePath(rootPath);
+    const imagesDir = getImagesDir(rootPath);
+
+    const hasDataFile = fs.existsSync(dataFilePath) && fs.statSync(dataFilePath).size > 2;
+    const hasImages = fs.existsSync(imagesDir) && fs.readdirSync(imagesDir).length > 0;
+
+    return hasDataFile || hasImages;
+}
 
 function createWindow() {
-    // 创建浏览器窗口
+    ensureStorageRoot();
+
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
@@ -24,33 +127,26 @@ function createWindow() {
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
-            nodeIntegration: false
+            nodeIntegration: false,
+            sandbox: true
         },
         titleBarStyle: 'default',
         show: false
     });
 
-    // 加载 index.html
     mainWindow.loadFile('index.html');
-
-    // 窗口准备好后显示（避免白屏）
-    mainWindow.once('ready-to-show', () => {
-        mainWindow.show();
-    });
-
-    // 打开开发者工具（调试用，发布时注释掉）
-    // mainWindow.webContents.openDevTools();
-
-    // 窗口关闭事件
+    mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.on('closed', () => {
         mainWindow = null;
     });
 
-    // 创建菜单
+    // 安全：限制导航和新窗口，防止渲染进程被劫持
+    mainWindow.webContents.on('will-navigate', (e) => e.preventDefault());
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
     createMenu();
 }
 
-// 创建应用菜单
 function createMenu() {
     const template = [
         {
@@ -59,17 +155,13 @@ function createMenu() {
                 {
                     label: '新建对话',
                     accelerator: 'CmdOrCtrl+N',
-                    click: () => {
-                        mainWindow.webContents.send('menu-new-chat');
-                    }
+                    click: () => mainWindow.webContents.send('menu-new-chat')
                 },
                 { type: 'separator' },
                 {
                     label: '退出',
                     accelerator: 'CmdOrCtrl+Q',
-                    click: () => {
-                        app.quit();
-                    }
+                    click: () => app.quit()
                 }
             ]
         },
@@ -109,7 +201,7 @@ function createMenu() {
                             type: 'info',
                             title: '关于 AI 对话系统',
                             message: 'AI 对话系统 - 多模型集成',
-                            detail: '版本: 1.0.0\n支持 MiMo、DeepSeek、GPT 等多个AI模型\n\n© 2026 AI Chat Team'
+                            detail: '版本: 1.0.0\n支持 MiMo、DeepSeek、GPT 等多种 AI 模型\n\n© 2026 AI Chat Team'
                         });
                     }
                 },
@@ -117,18 +209,16 @@ function createMenu() {
                 {
                     label: '数据目录',
                     click: () => {
-                        shell.openPath(userDataPath);
+                        shell.openPath(getEffectiveDataRoot());
                     }
                 }
             ]
         }
     ];
 
-    const menu = Menu.buildFromTemplate(template);
-    Menu.setApplicationMenu(menu);
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// 应用准备就绪
 app.whenReady().then(() => {
     createWindow();
 
@@ -139,17 +229,16 @@ app.whenReady().then(() => {
     });
 });
 
-// 所有窗口关闭
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-// IPC 通信：保存数据
 ipcMain.handle('save-data', async (event, data) => {
     try {
-        fs.writeFileSync(dataFilePath, JSON.stringify(data, null, 2), 'utf-8');
+        ensureStorageRoot();
+        fs.writeFileSync(getDataFilePath(), JSON.stringify(data, null, 2), 'utf-8');
         return { success: true };
     } catch (error) {
         console.error('保存数据失败:', error);
@@ -157,9 +246,10 @@ ipcMain.handle('save-data', async (event, data) => {
     }
 });
 
-// IPC 通信：加载数据
 ipcMain.handle('load-data', async () => {
     try {
+        ensureStorageRoot();
+        const dataFilePath = getDataFilePath();
         if (fs.existsSync(dataFilePath)) {
             const data = fs.readFileSync(dataFilePath, 'utf-8');
             return { success: true, data: JSON.parse(data) };
@@ -171,7 +261,6 @@ ipcMain.handle('load-data', async () => {
     }
 });
 
-// IPC 通信：导出数据
 ipcMain.handle('export-data', async (event, data) => {
     try {
         const result = await dialog.showSaveDialog(mainWindow, {
@@ -194,7 +283,6 @@ ipcMain.handle('export-data', async (event, data) => {
     }
 });
 
-// IPC 通信：导入数据
 ipcMain.handle('import-data', async () => {
     try {
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -207,7 +295,12 @@ ipcMain.handle('import-data', async () => {
         });
 
         if (!result.canceled && result.filePaths.length > 0) {
-            const data = fs.readFileSync(result.filePaths[0], 'utf-8');
+            const filePath = result.filePaths[0];
+            const stats = fs.statSync(filePath);
+            if (stats.size > 50 * 1024 * 1024) {
+                return { success: false, error: '文件过大（超过50MB）' };
+            }
+            const data = fs.readFileSync(filePath, 'utf-8');
             return { success: true, data: JSON.parse(data) };
         }
         return { success: false, canceled: true };
@@ -217,12 +310,10 @@ ipcMain.handle('import-data', async () => {
     }
 });
 
-// IPC 通信：显示消息框
 ipcMain.handle('show-message', async (event, options) => {
-    return await dialog.showMessageBox(mainWindow, options);
+    return dialog.showMessageBox(mainWindow, options);
 });
 
-// IPC 通信：显示确认框
 ipcMain.handle('show-confirm', async (event, options) => {
     const result = await dialog.showMessageBox(mainWindow, {
         type: 'question',
@@ -234,7 +325,6 @@ ipcMain.handle('show-confirm', async (event, options) => {
     return result.response === 0;
 });
 
-// IPC 通信：选择目录
 ipcMain.handle('select-directory', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openDirectory']
@@ -245,20 +335,65 @@ ipcMain.handle('select-directory', async () => {
     return { success: false };
 });
 
-// IPC 通信：获取数据路径
-ipcMain.handle('get-data-path', async () => {
-    return userDataPath;
+ipcMain.handle('set-data-path', async (event, targetPath) => {
+    try {
+        if (!targetPath) {
+            throw new Error('目标目录不能为空');
+        }
+        const normalizedTargetPath = path.resolve(targetPath);
+        const currentRoot = getEffectiveDataRoot();
+        if (normalizedTargetPath !== currentRoot && hasExistingStorageData(normalizedTargetPath)) {
+            throw new Error('目标目录已有聊天数据或图片，请先清空目标目录后再切换');
+        }
+        migrateStorage(currentRoot, normalizedTargetPath);
+        writeStorageSettings({ customPath: normalizedTargetPath });
+        ensureStorageRoot(normalizedTargetPath);
+        return { success: true, path: normalizedTargetPath };
+    } catch (error) {
+        console.error('设置数据目录失败:', error);
+        return { success: false, error: error.message };
+    }
 });
 
-// IPC 通信：获取应用根目录路径
+ipcMain.handle('clear-data', async () => {
+    try {
+        ensureStorageRoot();
+        fs.writeFileSync(getDataFilePath(), JSON.stringify({}, null, 2), 'utf-8');
+        clearDirectoryContents(getImagesDir());
+        return { success: true };
+    } catch (error) {
+        console.error('清除数据失败:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('clear-images', async () => {
+    try {
+        ensureStorageRoot();
+        clearDirectoryContents(getImagesDir());
+        return { success: true };
+    } catch (error) {
+        console.error('清除图片失败:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('get-data-path', async () => {
+    return getEffectiveDataRoot();
+});
+
 ipcMain.handle('get-app-path', async () => {
     return __dirname;
 });
 
-// IPC 通信：保存生成的图片
 ipcMain.handle('save-image', async (event, id, dataUrl) => {
     try {
-        const filePath = path.join(imagesDir, `${id}.png`);
+        // 校验 id 参数，防止路径遍历攻击
+        if (!id || !/^[\w\-]+$/.test(id)) {
+            return { success: false, error: '无效的图片 ID' };
+        }
+        ensureStorageRoot();
+        const filePath = path.join(getImagesDir(), `${id}.png`);
         const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
         fs.writeFileSync(filePath, base64Data, 'base64');
         return { success: true };
@@ -268,11 +403,13 @@ ipcMain.handle('save-image', async (event, id, dataUrl) => {
     }
 });
 
-// IPC 通信：加载单张图片
 ipcMain.handle('load-image', async (event, id) => {
     try {
-        const filePath = path.join(imagesDir, `${id}.png`);
-        if (!fs.existsSync(filePath)) return { success: true, data: null };
+        ensureStorageRoot();
+        const filePath = path.join(getImagesDir(), `${id}.png`);
+        if (!fs.existsSync(filePath)) {
+            return { success: true, data: null };
+        }
         const base64 = fs.readFileSync(filePath, 'base64');
         return { success: true, data: `data:image/png;base64,${base64}` };
     } catch (error) {
@@ -281,12 +418,12 @@ ipcMain.handle('load-image', async (event, id) => {
     }
 });
 
-// IPC 通信：批量加载图片
 ipcMain.handle('load-all-images', async (event, ids) => {
     try {
+        ensureStorageRoot();
         const result = {};
         for (const id of ids) {
-            const filePath = path.join(imagesDir, `${id}.png`);
+            const filePath = path.join(getImagesDir(), `${id}.png`);
             if (fs.existsSync(filePath)) {
                 result[id] = `data:image/png;base64,${fs.readFileSync(filePath, 'base64')}`;
             }

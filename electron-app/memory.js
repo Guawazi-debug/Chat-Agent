@@ -246,7 +246,11 @@ class SemanticMemory {
             }
         }
 
-        // 缓存结果
+        // 缓存结果（LRU：超过上限时淘汰最早的条目）
+        if (this.embeddingCache.size >= 500) {
+            const oldestKey = this.embeddingCache.keys().next().value;
+            this.embeddingCache.delete(oldestKey);
+        }
         this.embeddingCache.set(cacheKey, embedding);
 
         return embedding;
@@ -660,12 +664,21 @@ class MemoryManager {
     }
 
     /**
-     * 保存长期记忆到localStorage
+     * 保存长期记忆（统一使用 ai_chat_long_term_memory 键，与主应用一致）
+     * 优先通过 StorageAdapter 跨平台持久化
      */
     saveLongTermMemory() {
         try {
             const data = this.longTerm.toJSON();
-            localStorage.setItem('ai_chat_long_term_memory_v2', JSON.stringify(data));
+            const key = 'ai_chat_long_term_memory';
+            const jsonStr = JSON.stringify(data);
+            localStorage.setItem(key, jsonStr);
+            // 通过 StorageAdapter 持久化到 Electron/Mobile 文件系统
+            if (typeof StorageAdapter !== 'undefined' && StorageAdapter.save) {
+                StorageAdapter.save(key, data).catch(e =>
+                    console.error('[Memory] 跨平台持久化失败:', e)
+                );
+            }
         } catch (e) {
             console.error('[Memory] 保存长期记忆失败:', e);
         }
@@ -676,7 +689,7 @@ class MemoryManager {
      */
     loadLongTermMemory() {
         try {
-            const data = localStorage.getItem('ai_chat_long_term_memory_v2');
+            const data = localStorage.getItem('ai_chat_long_term_memory');
             if (data) {
                 const parsed = JSON.parse(data);
                 this.longTerm.fromJSON(parsed);

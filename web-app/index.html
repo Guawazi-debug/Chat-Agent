@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 对话系统 - 多模型集成</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src *;">
+    <title>小A智能助手</title>
     <link rel="icon" type="image/png" href="logo.png">
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -134,14 +135,16 @@
             <div class="chat-messages" id="chatMessages">
                 <!-- 欢迎消息 -->
                 <div class="welcome-message">
-                    <h1>AI 对话系统</h1>
-                    <p>智能工作流自动处理，DeepSeek 意图识别 + MiMo 图片理解 + 联网搜索</p>
-                    <div class="feature-tags">
-                        <span class="tag">智能意图识别</span>
-                        <span class="tag">图片理解</span>
-                        <span class="tag">联网搜索</span>
-                        <span class="tag">深度思考</span>
-                        <span class="tag">上下文记忆</span>
+                    <h1>小A智能助手</h1>
+                    <p>专属超级智能体助手</p>
+                    <div class="welcome-suggestions">
+                        <div class="welcome-suggestions-title">今天聊什么呢？</div>
+                        <div class="welcome-suggestions-list">
+                            <button class="welcome-suggestion-btn" onclick="handleTopicSuggestion(this)" data-text="帮我梳理今天最值得推进的一个任务">帮我梳理今天最值得推进的一个任务</button>
+                            <button class="welcome-suggestion-btn" onclick="handleTopicSuggestion(this)" data-text="根据我的长期目标，给我 3 个下一步建议">根据我的长期目标，给我 3 个下一步建议</button>
+                            <button class="welcome-suggestion-btn" onclick="handleTopicSuggestion(this)" data-text="把当前想法整理成可执行计划">把当前想法整理成可执行计划</button>
+                            <button class="welcome-suggestion-btn" onclick="handleTopicSuggestion(this)" data-text="帮我检查最近项目里的风险和优化点">帮我检查最近项目里的风险和优化点</button>
+                        </div>
                     </div>
                 </div>
             </div>

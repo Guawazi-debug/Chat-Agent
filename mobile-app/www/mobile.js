@@ -219,15 +219,14 @@ const MobileAPI = {
         try {
             const { Keyboard } = await import('@capacitor/keyboard');
 
-            // 键盘显示时调整布局
-            Keyboard.addListener('keyboardWillShow', (info) => {
-                document.body.style.paddingBottom = info.keyboardHeight + 'px';
-                this.scrollToBottom();
+            // capacitor.config.json 已配置 resize: "body"，自动处理布局
+            // 仅监听键盘显示事件，滚动到最新消息
+            Keyboard.addListener('keyboardWillShow', () => {
+                setTimeout(() => this.scrollToBottom(), 150);
             });
 
-            // 键盘隐藏时恢复布局
             Keyboard.addListener('keyboardWillHide', () => {
-                document.body.style.paddingBottom = '0px';
+                setTimeout(() => this.scrollToBottom(), 150);
             });
         } catch (e) {
             console.log('Keyboard 插件不可用');
@@ -235,9 +234,9 @@ const MobileAPI = {
     },
 
     // 监听应用生命周期
-    setupAppListeners() {
+    async setupAppListeners() {
         try {
-            const { App } = require('@capacitor/app');
+            const { App } = await import('@capacitor/app');
 
             // 应用恢复到前台
             App.addListener('appStateChange', ({ isActive }) => {
@@ -328,36 +327,61 @@ const MobileAPI = {
     async saveFile(filename, data) {
         try {
             const { Filesystem, Directory } = await import('@capacitor/filesystem');
-
-            await Filesystem.writeFile({
-                path: filename,
-                data: data,
-                directory: Directory.Documents
-            });
+            const lastSlashIndex = filename.lastIndexOf('/');
+            if (lastSlashIndex > 0) {
+                const dirPath = filename.slice(0, lastSlashIndex);
+                try {
+                    await Filesystem.mkdir({ path: dirPath, directory: Directory.Documents, recursive: true });
+                } catch (e) {
+                }
+            }
+            await Filesystem.writeFile({ path: filename, data: data, directory: Directory.Documents });
             return true;
         } catch (e) {
-            console.log('保存文件失败:', e);
+            console.log('??????:', e);
             return false;
         }
     },
 
     // 读取本地文件
-    async readFile(filename) {
+    async readFile(filename, strict = false) {
         try {
             const { Filesystem, Directory } = await import('@capacitor/filesystem');
-
-            const result = await Filesystem.readFile({
-                path: filename,
-                directory: Directory.Documents
-            });
+            const result = await Filesystem.readFile({ path: filename, directory: Directory.Documents });
             return result.data;
         } catch (e) {
-            console.log('读取文件失败:', e);
+            const message = (e?.message || '').toLowerCase();
+            const missingFile = message.includes('not exist') || message.includes('no such file') || message.includes('cannot find');
+            if (missingFile) return null;
+            console.log('??????:', e);
+            if (strict) throw e;
             return null;
         }
     },
 
     // 发送本地通知
+    async deleteFile(filename) {
+        try {
+            const { Filesystem, Directory } = await import('@capacitor/filesystem');
+            await Filesystem.deleteFile({ path: filename, directory: Directory.Documents });
+            return true;
+        } catch (e) {
+            console.log('??????:', e);
+            return false;
+        }
+    },
+
+    async removeDirectory(dirName) {
+        try {
+            const { Filesystem, Directory } = await import('@capacitor/filesystem');
+            await Filesystem.rmdir({ path: dirName, directory: Directory.Documents, recursive: true });
+            return true;
+        } catch (e) {
+            console.log('??????:', e);
+            return false;
+        }
+    },
+
     async sendNotification(title, body) {
         try {
             const { LocalNotifications } = await import('@capacitor/local-notifications');
