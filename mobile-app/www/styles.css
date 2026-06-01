@@ -48,9 +48,6 @@ body {
     display: flex;
     height: 100vh;
     overflow: hidden;
-    /* Safe Area 适配（iOS 刘海/灵动岛、底部 Home Indicator） */
-    padding-top: env(safe-area-inset-top, 0);
-    padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
 /* 滚动条样式 */
@@ -1546,6 +1543,7 @@ body {
 /* 记忆操作按钮 */
 .memory-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
 }
 
@@ -2804,8 +2802,6 @@ body {
 .input-area {
     background-color: var(--chat-bg);
     padding: 16px 24px 24px;
-    /* 底部安全区域适配 */
-    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0));
 }
 
 .input-wrapper {

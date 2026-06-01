@@ -4,7 +4,7 @@
 
 const APP_CONFIG = {
     appName: 'AI 对话系统',
-    version: '1.4.0',
+    version: '1.5.0',
     storagePrefix: 'ai_chat_',
     defaultTheme: 'dark'
 };
@@ -93,7 +93,8 @@ const MEMORY_CONFIG = {
     enableLongTermMemory: true,
     autoSummarize: true,
     maxLongTermMemories: 100,
-    relevanceThreshold: 0.5
+    relevanceThreshold: 0.5,
+    memoryModel: 'deepseek-v4-flash'
 };
 
 const UI_CONFIG = {
@@ -329,6 +330,7 @@ const WORKFLOW_TIMEOUT = {
     intent: 30000,    // 30秒
     image: 60000,     // 60秒
     search: 45000,    // 45秒
+    generate: 90000,  // 90秒（图片生成）
     answer: 120000    // 2分钟
 };
 

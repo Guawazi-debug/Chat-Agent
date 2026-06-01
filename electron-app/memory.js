@@ -664,13 +664,13 @@ class MemoryManager {
     }
 
     /**
-     * 保存长期记忆（统一使用 ai_chat_long_term_memory 键，与主应用一致）
+     * 保存语义记忆（使用独立存储键，避免与主应用的 long_term_memory 冲突）
      * 优先通过 StorageAdapter 跨平台持久化
      */
     saveLongTermMemory() {
         try {
             const data = this.longTerm.toJSON();
-            const key = 'ai_chat_long_term_memory';
+            const key = 'ai_chat_semantic_memory';
             const jsonStr = JSON.stringify(data);
             localStorage.setItem(key, jsonStr);
             // 通过 StorageAdapter 持久化到 Electron/Mobile 文件系统
@@ -685,18 +685,18 @@ class MemoryManager {
     }
 
     /**
-     * 从localStorage加载长期记忆
+     * 从localStorage加载语义记忆
      */
     loadLongTermMemory() {
         try {
-            const data = localStorage.getItem('ai_chat_long_term_memory');
+            const data = localStorage.getItem('ai_chat_semantic_memory');
             if (data) {
                 const parsed = JSON.parse(data);
                 this.longTerm.fromJSON(parsed);
-                console.log(`[Memory] 加载了 ${this.longTerm.memories.size} 条长期记忆`);
+                console.log(`[Memory] 加载了 ${this.longTerm.memories.size} 条语义记忆`);
             }
         } catch (e) {
-            console.error('[Memory] 加载长期记忆失败:', e);
+            console.error('[Memory] 加载语义记忆失败:', e);
         }
     }
 
@@ -707,7 +707,7 @@ class MemoryManager {
         this.shortTerm = [];
         this.longTerm = new SemanticMemory();
         this.working = {};
-        localStorage.removeItem('ai_chat_long_term_memory_v2');
+        localStorage.removeItem('ai_chat_semantic_memory');
         console.log('[Memory] 已清空所有记忆');
     }
 

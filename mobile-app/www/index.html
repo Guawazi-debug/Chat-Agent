@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src *;">
     <title>小A智能助手</title>
     <link rel="icon" type="image/png" href="logo.png">
@@ -222,7 +222,10 @@
                 <div class="memory-section">
                     <div class="section-header">
                         <h3>用户画像</h3>
-                        <span class="profile-auto-tag">自动分析</span>
+                        <div class="memory-actions">
+                            <span class="profile-auto-tag">自动分析</span>
+                            <button class="btn-clear-memory" id="clearProfileBtn">清空画像</button>
+                        </div>
                     </div>
                     <div id="userProfileCard" class="user-profile-card">
                         <div class="profile-field">
@@ -399,6 +402,16 @@
                             <label for="autoSummarize">自动摘要</label>
                             <small>自动压缩过长的上下文</small>
                         </div>
+                        <div class="input-group">
+                            <label>记忆总结模型</label>
+                            <select id="memoryModel">
+                                <option value="deepseek-v4-flash">DeepSeek v4 Flash（推荐）</option>
+                                <option value="deepseek-v4-pro">DeepSeek v4 Pro</option>
+                                <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+                                <option value="mimo-v2.5">MiMo v2.5</option>
+                            </select>
+                            <small>用于对话总结、用户画像分析、记忆整合的模型</small>
+                        </div>
                     </div>
                     <button class="btn-save" id="saveMemorySettingsBtn">保存记忆设置</button>
                     <button class="btn-danger" id="clearMemorySettingsBtn">清除所有记忆</button>
@@ -526,7 +539,6 @@
     <script src="secrets.js"></script>
     <script src="config.js"></script>
     <script src="memory.js"></script>
-    <script src="mobile.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
