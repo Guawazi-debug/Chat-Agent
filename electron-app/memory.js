@@ -418,7 +418,13 @@ class SemanticMemory {
      */
     fromJSON(data) {
         if (data.memories) {
-            this.memories = new Map(data.memories);
+            this.memories = new Map(data.memories.map(([id, item]) => {
+                // 确保 embedding 是 Map 对象（JSON 序列化后会变成普通对象）
+                if (item.embedding && !(item.embedding instanceof Map)) {
+                    item.embedding = new Map(Object.entries(item.embedding));
+                }
+                return [id, item];
+            }));
         }
         if (data.index) {
             this.index = new Map(data.index.map(([word, ids]) => [word, new Set(ids)]));

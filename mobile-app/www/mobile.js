@@ -193,12 +193,23 @@ const MobileAPI = {
         MobileLogger.info('移动端初始化完成');
     },
 
+    // 获取 Capacitor 插件（安全访问）
+    _getPlugin(name) {
+        try {
+            return window.Capacitor?.Plugins?.[name] || null;
+        } catch (e) {
+            return null;
+        }
+    },
+
     // 设置状态栏
     async setupStatusBar() {
         try {
-            const { StatusBar, Style } = await import('@capacitor/status-bar');
-            await StatusBar.setStyle({ style: Style.Dark });
-            await StatusBar.setBackgroundColor({ color: '#1a1a1e' });
+            const StatusBar = this._getPlugin('StatusBar');
+            if (StatusBar) {
+                await StatusBar.setStyle({ style: 'DARK' });
+                await StatusBar.setBackgroundColor({ color: '#1a1a1e' });
+            }
         } catch (e) {
             console.log('StatusBar 插件不可用');
         }
@@ -207,8 +218,10 @@ const MobileAPI = {
     // 隐藏启动画面
     async hideSplashScreen() {
         try {
-            const { SplashScreen } = await import('@capacitor/splash-screen');
-            await SplashScreen.hide();
+            const SplashScreen = this._getPlugin('SplashScreen');
+            if (SplashScreen) {
+                await SplashScreen.hide();
+            }
         } catch (e) {
             console.log('SplashScreen 插件不可用');
         }
@@ -217,17 +230,15 @@ const MobileAPI = {
     // 设置键盘行为
     async setupKeyboard() {
         try {
-            const { Keyboard } = await import('@capacitor/keyboard');
-
-            // capacitor.config.json 已配置 resize: "body"，自动处理布局
-            // 仅监听键盘显示事件，滚动到最新消息
-            Keyboard.addListener('keyboardWillShow', () => {
-                setTimeout(() => this.scrollToBottom(), 150);
-            });
-
-            Keyboard.addListener('keyboardWillHide', () => {
-                setTimeout(() => this.scrollToBottom(), 150);
-            });
+            const Keyboard = this._getPlugin('Keyboard');
+            if (Keyboard) {
+                Keyboard.addListener('keyboardWillShow', () => {
+                    setTimeout(() => this.scrollToBottom(), 150);
+                });
+                Keyboard.addListener('keyboardWillHide', () => {
+                    setTimeout(() => this.scrollToBottom(), 150);
+                });
+            }
         } catch (e) {
             console.log('Keyboard 插件不可用');
         }
@@ -236,17 +247,28 @@ const MobileAPI = {
     // 监听应用生命周期
     async setupAppListeners() {
         try {
-            const { App } = await import('@capacitor/app');
+            const App = this._getPlugin('App');
+            if (!App) return;
 
-            // 应用恢复到前台
             App.addListener('appStateChange', ({ isActive }) => {
                 if (isActive) {
                     console.log('应用回到前台');
                 }
             });
 
-            // 返回按钮处理（Android）
             App.addListener('backButton', ({ canGoBack }) => {
+                const activeModal = document.querySelector('.modal.active');
+                if (activeModal) {
+                    closeModal(activeModal.id);
+                    return;
+                }
+                const sidebar = document.getElementById('sidebar');
+                if (sidebar && sidebar.classList.contains('active')) {
+                    sidebar.classList.remove('active');
+                    const overlay = document.querySelector('.sidebar-overlay');
+                    if (overlay) overlay.classList.remove('active');
+                    return;
+                }
                 if (!canGoBack) {
                     App.exitApp();
                 } else {
@@ -268,21 +290,30 @@ const MobileAPI = {
         }
     },
 
-    // 使用相机拍照
+    // 使用相机拍照或从相册选择
     async takePicture() {
         try {
-            const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+            const Camera = this._getPlugin('Camera');
+            if (!Camera) {
+                console.error('[Camera] Camera插件未注册');
+                if (window.showToast) window.showToast('相机插件不可用', 'error');
+                return null;
+            }
 
-            const image = await Camera.getPhoto({
+            const result = await Camera.getPhoto({
                 quality: 90,
                 allowEditing: false,
-                resultType: CameraResultType.DataUrl,
-                source: CameraSource.Prompt // 让用户选择拍照或从相册选择
+                resultType: 'dataUrl',
+                source: 'PROMPT'
             });
 
-            return image.dataUrl;
+            return result.dataUrl;
         } catch (e) {
-            console.log('拍照取消或失败:', e);
+            if (e.message && (e.message.includes('cancel') || e.message.includes('User'))) return null;
+            console.error('[Camera] 选择图片失败:', e.message || e);
+            if (window.showToast) {
+                window.showToast('图片选择失败: ' + (e.message || '未知错误'), 'error');
+            }
             return null;
         }
     },
@@ -290,18 +321,20 @@ const MobileAPI = {
     // 从相册选择图片
     async pickImage() {
         try {
-            const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+            const Camera = this._getPlugin('Camera');
+            if (!Camera) return null;
 
-            const image = await Camera.getPhoto({
+            const result = await Camera.getPhoto({
                 quality: 90,
                 allowEditing: false,
-                resultType: CameraResultType.DataUrl,
-                source: CameraSource.Photos
+                resultType: 'dataUrl',
+                source: 'PHOTOS'
             });
 
-            return image.dataUrl;
+            return result.dataUrl;
         } catch (e) {
-            console.log('选择图片取消或失败:', e);
+            if (e.message && (e.message.includes('cancel') || e.message.includes('User'))) return null;
+            console.error('[Camera] 从相册选择失败:', e.message || e);
             return null;
         }
     },
@@ -309,7 +342,8 @@ const MobileAPI = {
     // 分享内容
     async shareContent(title, text) {
         try {
-            const { Share } = await import('@capacitor/share');
+            const Share = this._getPlugin('Share');
+            if (!Share) return false;
 
             await Share.share({
                 title: title,
@@ -323,22 +357,45 @@ const MobileAPI = {
         }
     },
 
-    // 保存文件到本地
+    // 保存文件到本地（使用应用私有存储）
     async saveFile(filename, data) {
         try {
-            const { Filesystem, Directory } = await import('@capacitor/filesystem');
+            const Filesystem = this._getPlugin('Filesystem');
+            if (!Filesystem) {
+                console.error('[Filesystem] 插件未注册');
+                return false;
+            }
+
+            console.log('[Filesystem] 保存文件:', filename);
+
+            // 创建目录
             const lastSlashIndex = filename.lastIndexOf('/');
             if (lastSlashIndex > 0) {
                 const dirPath = filename.slice(0, lastSlashIndex);
                 try {
-                    await Filesystem.mkdir({ path: dirPath, directory: Directory.Documents, recursive: true });
+                    await Filesystem.mkdir({ path: dirPath, directory: 'DATA', recursive: true });
                 } catch (e) {
+                    // 目录可能已存在
                 }
             }
-            await Filesystem.writeFile({ path: filename, data: data, directory: Directory.Documents });
+
+            // 图片等二进制数据不使用encoding参数
+            const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg');
+            const writeOptions = {
+                path: filename,
+                data: data,
+                directory: 'DATA',
+                recursive: true
+            };
+            if (!isImage) {
+                writeOptions.encoding = 'UTF8';
+            }
+
+            await Filesystem.writeFile(writeOptions);
+            console.log('[Filesystem] 文件保存成功:', filename);
             return true;
         } catch (e) {
-            console.log('??????:', e);
+            console.error('[Filesystem] 保存文件失败:', filename, e.message || e);
             return false;
         }
     },
@@ -346,48 +403,73 @@ const MobileAPI = {
     // 读取本地文件
     async readFile(filename, strict = false) {
         try {
-            const { Filesystem, Directory } = await import('@capacitor/filesystem');
-            const result = await Filesystem.readFile({ path: filename, directory: Directory.Documents });
+            const Filesystem = this._getPlugin('Filesystem');
+            if (!Filesystem) {
+                console.error('[Filesystem] 插件未注册');
+                return null;
+            }
+
+            console.log('[Filesystem] 读取文件:', filename);
+
+            const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg');
+            const readOptions = {
+                path: filename,
+                directory: 'DATA'
+            };
+            if (!isImage) {
+                readOptions.encoding = 'UTF8';
+            }
+
+            const result = await Filesystem.readFile(readOptions);
+            console.log('[Filesystem] 文件读取成功:', filename);
             return result.data;
         } catch (e) {
             const message = (e?.message || '').toLowerCase();
             const missingFile = message.includes('not exist') || message.includes('no such file') || message.includes('cannot find');
-            if (missingFile) return null;
-            console.log('??????:', e);
+            if (missingFile) {
+                console.log('[Filesystem] 文件不存在:', filename);
+                return null;
+            }
+            console.error('[Filesystem] 读取文件失败:', filename, e.message || e);
             if (strict) throw e;
             return null;
         }
     },
 
-    // 发送本地通知
+    // 删除文件
     async deleteFile(filename) {
         try {
-            const { Filesystem, Directory } = await import('@capacitor/filesystem');
-            await Filesystem.deleteFile({ path: filename, directory: Directory.Documents });
+            const Filesystem = this._getPlugin('Filesystem');
+            if (!Filesystem) return false;
+
+            await Filesystem.deleteFile({ path: filename, directory: 'DATA' });
             return true;
         } catch (e) {
-            console.log('??????:', e);
+            console.error('删除文件失败:', filename, e);
             return false;
         }
     },
 
+    // 删除目录
     async removeDirectory(dirName) {
         try {
-            const { Filesystem, Directory } = await import('@capacitor/filesystem');
-            await Filesystem.rmdir({ path: dirName, directory: Directory.Documents, recursive: true });
+            const Filesystem = this._getPlugin('Filesystem');
+            if (!Filesystem) return false;
+
+            await Filesystem.rmdir({ path: dirName, directory: 'DATA', recursive: true });
             return true;
         } catch (e) {
-            console.log('??????:', e);
+            console.error('删除目录失败:', dirName, e);
             return false;
         }
     },
 
     async sendNotification(title, body) {
         try {
-            const { LocalNotifications } = await import('@capacitor/local-notifications');
+            const LocalNotifications = this._getPlugin('LocalNotifications');
+            if (!LocalNotifications) return false;
 
             await LocalNotifications.requestPermissions();
-
             await LocalNotifications.schedule({
                 notifications: [{
                     title: title,
@@ -405,8 +487,10 @@ const MobileAPI = {
     // 触发震动反馈
     async vibrate(duration = 100) {
         try {
-            const { Haptics, ImpactStyle } = await import('@capacitor/haptics');
-            await Haptics.impact({ style: ImpactStyle.Light });
+            const Haptics = this._getPlugin('Haptics');
+            if (Haptics) {
+                await Haptics.impact({ style: 'LIGHT' });
+            }
         } catch (e) {
             // 静默失败
         }
@@ -415,8 +499,11 @@ const MobileAPI = {
     // 获取设备信息
     async getDeviceInfo() {
         try {
-            const { Device } = await import('@capacitor/device');
-            return await Device.getInfo();
+            const Device = this._getPlugin('Device');
+            if (Device) {
+                return await Device.getInfo();
+            }
+            return { platform: 'web' };
         } catch (e) {
             return { platform: 'web' };
         }

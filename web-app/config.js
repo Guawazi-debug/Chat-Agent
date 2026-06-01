@@ -4,7 +4,7 @@
 
 const APP_CONFIG = {
     appName: 'AI 对话系统',
-    version: '1.5.0',
+    version: '1.6.0',
     storagePrefix: 'ai_chat_',
     defaultTheme: 'dark'
 };

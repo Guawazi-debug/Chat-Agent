@@ -19,19 +19,13 @@ const StorageAdapter = {
                 allData[key] = data;
                 const result = await window.electronAPI.saveData(allData);
                 if (!result?.success) throw new Error(result?.error || 'Electron 数据保存失败');
-            } else if (this.isMobile) {
-                const allData = await this._loadAllData(true);
-                allData[key] = data;
-                const success = await window.MobileAPI.saveFile('chat-data.json', JSON.stringify(allData));
-                if (!success) throw new Error('移动端数据保存失败');
             } else {
+                // Web和移动端都直接使用localStorage
                 localStorage.setItem(key, jsonData);
             }
         } catch (e) {
             console.error('保存数据失败:', key, e);
             try { localStorage.setItem(key, jsonData); } catch (le) { console.error('localStorage 写入失败:', le); }
-            showToast('数据保存失败，已回退到本地缓存', 'error');
-            throw e;
         }
     },
 
@@ -40,10 +34,8 @@ const StorageAdapter = {
             if (this.isElectron) {
                 const allData = await this._loadAllData();
                 return allData[key] || null;
-            } else if (this.isMobile) {
-                const allData = await this._loadAllData();
-                return allData[key] || null;
             } else {
+                // Web和移动端都直接使用localStorage
                 const data = localStorage.getItem(key);
                 return data ? JSON.parse(data) : null;
             }
@@ -66,9 +58,6 @@ const StorageAdapter = {
                 if (result?.success) return result.data || {};
                 if (strict) throw new Error(result?.error || 'Electron 数据读取失败');
                 return {};
-            } else if (this.isMobile) {
-                const data = await window.MobileAPI.readFile('chat-data.json', strict);
-                return data ? JSON.parse(data) : {};
             }
         } catch (e) {
             console.error('加载持久化数据失败:', e);
@@ -85,11 +74,13 @@ const StorageAdapter = {
             console.error('localStorage 写入失败:', key, e);
             showToast('本地缓存写入失败，存储空间可能已满', 'error');
         }
-        this.save(key, data).catch(e => {
-            console.error('异步保存失败:', e);
-            // 重试一次
-            setTimeout(() => this.save(key, data).catch(e2 => console.error('重试保存失败:', e2)), 1000);
-        });
+        // 移动端不异步写入Filesystem，直接使用localStorage
+        if (!this.isMobile) {
+            this.save(key, data).catch(e => {
+                console.error('异步保存失败:', e);
+                setTimeout(() => this.save(key, data).catch(e2 => console.error('重试保存失败:', e2)), 1000);
+            });
+        }
     },
 
     loadSync(key) {
@@ -104,7 +95,7 @@ const StorageAdapter = {
     },
 
     async init() {
-        if (this.isElectron || this.isMobile) {
+        if (this.isElectron) {
             try {
                 const allData = await this._loadAllData(true);
                 this.clearLocalCache();
@@ -119,6 +110,7 @@ const StorageAdapter = {
                 console.error('初始化存储失败:', e);
             }
         }
+        // 移动端直接使用localStorage，无需从Filesystem同步
         return false;
     },
 
@@ -366,7 +358,8 @@ const AppState = {
         value: '??'
     },
     selectMode: false,
-    selectedChats: new Set()
+    selectedChats: new Set(),
+    collapsedThinkingBlocks: new Set()
 };
 
 function collectGeneratedImageIds(chatHistory) {
@@ -1011,9 +1004,21 @@ function extractJsonObjectText(text) {
 }
 
 function parseUserProfileJson(text) {
-    const jsonText = extractJsonObjectText(text)
+    let jsonText = extractJsonObjectText(text)
         .replace(/,\s*([}\]])/g, '$1');
-    const parsed = JSON.parse(jsonText);
+    let parsed;
+    try {
+        parsed = JSON.parse(jsonText);
+    } catch (e) {
+        // JSON 可能被截断，尝试修复不完整的字符串
+        const repaired = jsonText.replace(/"([^"]*?)(\s*$)/, '"$1"');
+        try {
+            parsed = JSON.parse(repaired);
+        } catch (e2) {
+            console.warn('[Profile] JSON 解析失败，跳过画像更新:', e2.message);
+            return null;
+        }
+    }
     return {
         name: typeof parsed.name === 'string' ? parsed.name.trim() : '',
         role: typeof parsed.role === 'string' ? parsed.role.trim() : '',
@@ -1454,13 +1459,20 @@ function showConfirm(message) {
             resolve(false);
         };
 
+        const handleKeydown = (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); handleOk(); }
+            if (e.key === 'Escape') { e.preventDefault(); handleCancel(); }
+        };
+
         const cleanup = () => {
             DOM.confirmOkBtn.removeEventListener('click', handleOk);
             DOM.confirmCancelBtn.removeEventListener('click', handleCancel);
+            document.removeEventListener('keydown', handleKeydown);
         };
 
         DOM.confirmOkBtn.addEventListener('click', handleOk);
         DOM.confirmCancelBtn.addEventListener('click', handleCancel);
+        document.addEventListener('keydown', handleKeydown);
     });
 }
 
@@ -1468,6 +1480,11 @@ function showConfirm(message) {
  * 应用初始化
  */
 async function initApp() {
+    // 初始化移动端功能（请求权限等）
+    if (window.MobileAPI && window.isMobileApp) {
+        await window.MobileAPI.init();
+    }
+
     // 从持久化存储恢复数据（Electron/Mobile 环境）
     await StorageAdapter.init();
     // 初始化 IndexedDB 图片存储
@@ -1506,6 +1523,12 @@ async function initApp() {
     }
 
     console.log('AI对话系统初始化完成');
+
+    // 初始化移动端手势系统
+    if (window.isMobileApp) {
+        ContextMenu.init();
+        SidebarGesture.init();
+    }
 }
 
 /**
@@ -1874,14 +1897,14 @@ async function handleSendMessage() {
     // 立即设置生成中标志，防止并发竞态（在 streamResponse 真正接管前锁定）
     AppState.generatingChats.set(chatId, new AbortController());
 
+    try {
     const content = DOM.messageInput.value.trim();
     const hasImage = AppState.currentImage !== null;
 
     // 验证消息（有图片时可以没有文字）
-    if (!content && !hasImage) { AppState.generatingChats.delete(chatId); return; }
+    if (!content && !hasImage) { return; }
     if (content.length > UI_CONFIG.maxMessageLength) {
         showToast(ERROR_MESSAGES.messageTooLong, 'error');
-        AppState.generatingChats.delete(chatId);
         return;
     }
 
@@ -1889,7 +1912,6 @@ async function handleSendMessage() {
     if (!hasAnyApiKey()) {
         showToast('请先配置至少一个 API Key（DeepSeek、MiMo 或图片生成）', 'error');
         openModal('settingsModal');
-        AppState.generatingChats.delete(chatId);
         return;
     }
 
@@ -1922,6 +1944,8 @@ async function handleSendMessage() {
     }
 
     // 添加用户消息
+    const previousMessageCount = AppState.messages.length;
+    markThinkingBlocksCollapsed(previousMessageCount, chatId);
     const userMessage = {
         role: 'user',
         content: messageContent,
@@ -1969,11 +1993,24 @@ async function handleSendMessage() {
     // 确保滚动到底部
     scrollToBottom();
 
+    // 发送消息时的触觉反馈
+    if (window.isMobileApp && window.MobileAPI) {
+        window.MobileAPI.vibrate(10);
+    }
+
     // 执行工作流（传递保存的图片数据）
-    await executeWorkflow(content, hasImage, AppState.currentChatId, imageDataForWorkflow);
+    await executeWorkflow(content, hasImage, chatId, imageDataForWorkflow);
 
     // 工作流执行完成后，提取并保存记忆
     await checkAndSummarizeContext();
+
+    } catch (error) {
+        console.error('[Send] 消息处理失败:', error);
+        showToast(`消息处理失败：${error.message || '未知错误'}`, 'error');
+    } finally {
+        AppState.generatingChats.delete(chatId);
+        updateSendButton();
+    }
 }
 
 /**
@@ -2214,7 +2251,17 @@ async function executeImageStep(stepConfig, workflowState, context) {
 async function executeSearchStep(stepConfig, workflowState, context) {
     const searchConfig = { ...WORKFLOW_MODELS.webSearch, model: stepConfig.model, maxTokens: stepConfig.maxTokens, limit: stepConfig.limit, maxKeyword: stepConfig.maxKeyword };
     try {
-        const keywords = workflowState.results.intent?.keywords || [];
+        let keywords = workflowState.results.intent?.keywords || [];
+        // 如果意图识别失败导致关键词为空，使用用户原始输入作为搜索词
+        if (keywords.length === 0 && context.userInput) {
+            keywords = [context.userInput.slice(0, 50)];
+        }
+        if (keywords.length === 0) {
+            console.log('[Workflow] 搜索关键词为空，跳过搜索');
+            workflowState.results.searchResults = null;
+            workflowState.results.searchLinks = [];
+            return;
+        }
         const searchData = await searchWithMiMoPro(keywords, searchConfig);
         workflowState.results.searchResults = searchData.content;
         workflowState.results.searchLinks = searchData.searchResults;
@@ -2232,7 +2279,10 @@ async function executeGenerateStep(stepConfig, workflowState, context) {
     try {
         const imagePrompt = workflowState.results.intent?.imagePrompt || context.userInput;
         console.log('[Workflow] 图片生成提示词:', imagePrompt);
-        const result = await generateImageWithGPT(imagePrompt, context.chatId);
+        const result = await generateImageWithGPT(imagePrompt, context.chatId, {
+            size: stepConfig.size,
+            quality: stepConfig.quality
+        });
         workflowState.results.generatedImage = result;
     } catch (error) {
         console.error('[Workflow] 图片生成失败:', error);
@@ -2480,7 +2530,7 @@ async function searchWithMiMoPro(keywords, searchConfig = WORKFLOW_MODELS.webSea
  * @param {string} chatId - 对话ID
  * @returns {Promise<string>} 生成的图片base64数据
  */
-async function generateImageWithGPT(prompt, chatId) {
+async function generateImageWithGPT(prompt, chatId, stepConfig = {}) {
     const config = AppState.apiConfig.image;
 
     if (!config?.apiKey) {
@@ -2491,8 +2541,8 @@ async function generateImageWithGPT(prompt, chatId) {
         model: WORKFLOW_MODELS.generate?.model || 'gpt-image-2',
         prompt: prompt,
         n: 1,
-        size: WORKFLOW_MODELS.generate?.size || '1792x1024',
-        quality: WORKFLOW_MODELS.generate?.quality || 'hd',
+        size: stepConfig.size || WORKFLOW_MODELS.generate?.size || '1792x1024',
+        quality: stepConfig.quality || WORKFLOW_MODELS.generate?.quality || 'hd',
         response_format: 'b64_json'
     };
 
@@ -2992,11 +3042,6 @@ async function streamResponse(requestBody, config, chatId, searchLinks = []) {
             } else {
                 chatMessages[chatMessages.length - 1].reasoning_content = searchSection;
             }
-
-            // 同时追加到正文，确保用户在普通视图下也能看到参考来源
-            const lastMsg = chatMessages[chatMessages.length - 1];
-            const linksDisplay = '\n\n---\n**参考来源：**\n' + linksInfo;
-            lastMsg.content = (lastMsg.content || '') + linksDisplay;
         }
 
         // 生成话题建议（调用API）
@@ -3088,7 +3133,7 @@ function updateWorkflowUI(step, status, chatId) {
 
     if (displayStep === 'start') {
         stepEl.innerHTML = `
-            <span class="step-icon">🔄</span>
+            <span class="step-icon spinning">🔄</span>
             <span class="step-text">准备中...</span>
         `;
         modelEl.textContent = '';
@@ -3102,7 +3147,8 @@ function updateWorkflowUI(step, status, chatId) {
             statusEl.style.display = 'none';
         }, 3000);
     } else {
-        const icon = displayStatus === 'running' ? '🔄' : displayStatus === 'done' ? '✅' : '⏭️';
+        const isRunning = displayStatus === 'running';
+        const icon = isRunning ? '🔄' : displayStatus === 'done' ? '✅' : '⏭️';
         const statusText = displayStatus === 'skipped'
             ? `已跳过：${stepTypeName}`
             : displayStatus === 'done'
@@ -3110,7 +3156,7 @@ function updateWorkflowUI(step, status, chatId) {
                 : `正在${stepTypeName}...`;
 
         stepEl.innerHTML = `
-            <span class="step-icon">${icon}</span>
+            <span class="step-icon${isRunning ? ' spinning' : ''}">${icon}</span>
             <span class="step-text">${statusText}</span>
         `;
 
@@ -3448,6 +3494,9 @@ function saveCurrentChat() {
  * 渲染聊天消息
  */
 function renderChatMessages() {
+    // 全量渲染时清除assistant消息缓存
+    invalidateAssistantMsgCache();
+
     // 移除欢迎消息（如果有消息的话）
     const welcomeMsg = DOM.chatMessages.querySelector('.welcome-message');
     if (welcomeMsg && AppState.messages.length > 0) {
@@ -3497,7 +3546,7 @@ function renderChatMessages() {
                 : msg.content;
             // 如果有思考内容，先渲染思考区域（始终展开）
             if (msg.reasoning_content) {
-                content = renderThinkingBlock(msg.reasoning_content, msg.thinkingDuration, true);
+                content = renderThinkingBlock(msg.reasoning_content, msg.thinkingDuration, !isThinkingBlockCollapsed(index));
             }
             // 如果有生成的图片，渲染图片和下载按钮
             const genImage = msg.generatedImage || (msg.imageId ? ImageStore.getSync(msg.imageId) : null);
@@ -3521,33 +3570,33 @@ function renderChatMessages() {
                     </div>
                     <div class="message-body">${content}
                         ${!isUser && msg.topicSuggestions ? renderTopicSuggestions(msg.topicSuggestions) : ''}
-                        <div class="message-footer">
-                            <div class="message-actions">
-                                <button class="btn-message-action btn-copy" data-index="${index}" title="复制">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                    </svg>
-                                </button>
-                                <button class="btn-message-action btn-delete" data-index="${index}" title="删除">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <polyline points="3 6 5 6 21 6"></polyline>
-                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                                    </svg>
-                                </button>
-                                ${typeof window.MobileAPI !== 'undefined' && window.MobileAPI.shareContent ? `
-                                <button class="btn-message-action btn-share" data-index="${index}" title="分享">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <circle cx="18" cy="5" r="3"></circle>
-                                        <circle cx="6" cy="12" r="3"></circle>
-                                        <circle cx="18" cy="19" r="3"></circle>
-                                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-                                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-                                    </svg>
-                                </button>` : ''}
-                            </div>
-                            <span class="message-time">${time}</span>
+                    </div>
+                    <div class="message-footer">
+                        <div class="message-actions">
+                            <button class="btn-message-action btn-copy" data-index="${index}" title="复制">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                            <button class="btn-message-action btn-delete" data-index="${index}" title="删除">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                            </button>
+                            ${typeof window.MobileAPI !== 'undefined' && window.MobileAPI.shareContent ? `
+                            <button class="btn-message-action btn-share" data-index="${index}" title="分享">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="18" cy="5" r="3"></circle>
+                                    <circle cx="6" cy="12" r="3"></circle>
+                                    <circle cx="18" cy="19" r="3"></circle>
+                                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                                </svg>
+                            </button>` : ''}
                         </div>
+                        <span class="message-time">${time}</span>
                     </div>
                 </div>
             </div>
@@ -3559,6 +3608,9 @@ function renderChatMessages() {
 
     // 滚动到底部
     scrollToBottom();
+
+    // 初始化展开状态的思考块高度（确保首次收缩动画正常）
+    initThinkingHeights();
 }
 
 /**
@@ -3622,7 +3674,7 @@ function updateLastMessageContent(messages) {
     } else {
         if (lastMsg.reasoning_content) {
             // 深度思考内容始终展开
-            html = renderThinkingBlock(lastMsg.reasoning_content, lastMsg.thinkingDuration, true);
+            html = renderThinkingBlock(lastMsg.reasoning_content, lastMsg.thinkingDuration, !isThinkingBlockCollapsed(messages.length - 1));
         }
         // 只渲染有效的文本内容，不渲染loading占位文本
         const validText = textContent === '内容正在生成中' ? '' : textContent;
@@ -3671,6 +3723,9 @@ function updateLastMessageContent(messages) {
             messageBody.appendChild(suggestionsEl);
         }
     }
+
+    // 初始化展开状态的思考块高度（确保流式更新后动画正常）
+    initThinkingHeights();
 }
 
 /**
@@ -3714,6 +3769,26 @@ function bindMessageActions() {
             downloadGeneratedImage(index);
         });
     });
+
+    // 点击消息气泡显示/隐藏操作按钮（移动端）
+    if (window.isMobileApp) {
+        const chatMessages = document.getElementById('chatMessages');
+        if (chatMessages && !chatMessages._tapActionsInit) {
+            chatMessages._tapActionsInit = true;
+            chatMessages.addEventListener('click', (e) => {
+                const msgEl = e.target.closest('.message');
+                if (!msgEl) return;
+                // 如果点击的是按钮本身，不切换
+                if (e.target.closest('.btn-message-action') || e.target.closest('.btn-download-image')) return;
+                // 切换 show-actions 类
+                const wasShowing = msgEl.classList.contains('show-actions');
+                document.querySelectorAll('.message.show-actions').forEach(el => el.classList.remove('show-actions'));
+                if (!wasShowing) {
+                    msgEl.classList.add('show-actions');
+                }
+            });
+        }
+    }
 }
 
 /**
@@ -3734,6 +3809,10 @@ function copyMessageContent(index, btn) {
 
     // 显示复制成功状态
     const showCopied = () => {
+        // 复制成功时的触觉反馈
+        if (window.isMobileApp && window.MobileAPI) {
+            window.MobileAPI.vibrate(5);
+        }
         btn.classList.add('copied');
         btn.innerHTML = `
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3802,44 +3881,51 @@ async function deleteMessage(index) {
     AppState.messages.splice(index, 1);
     saveCurrentChat();
     renderChatMessages();
+
+    // 删除操作时的触觉反馈
+    if (window.isMobileApp && window.MobileAPI) {
+        window.MobileAPI.vibrate(20);
+    }
 }
 
 /**
  * 下载AI生成的图片
  * @param {number} index - 消息索引
  */
-function downloadGeneratedImage(index) {
+async function downloadGeneratedImage(index) {
     const msg = AppState.messages[index];
     if (!msg) return;
 
-    const imageUrl = msg.generatedImage || (msg.imageId ? ImageStore.getSync(msg.imageId) : null);
-    if (!imageUrl) return;
+    const imageData = msg.generatedImage || (msg.imageId ? ImageStore.getSync(msg.imageId) : null);
+    if (!imageData) {
+        showToast('没有可下载的图片', 'error');
+        return;
+    }
+
+    const imageUrl = imageData.startsWith('data:') ? imageData : `data:image/png;base64,${imageData}`;
     const fileName = `ai-image-${Date.now()}.png`;
 
-    if (imageUrl.startsWith('data:')) {
-        // base64 data URL：直接创建下载链接
-        const link = document.createElement('a');
-        link.href = imageUrl;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } else {
-        // 普通 URL：fetch 转 blob 后下载
-        fetch(imageUrl)
-            .then(res => res.blob())
-            .then(blob => {
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = fileName;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-            })
-            .catch(() => showToast('下载失败', 'error'));
+    // 移动端使用分享功能
+    if (window.isMobileApp && window.MobileAPI) {
+        try {
+            const shared = await window.MobileAPI.shareContent('AI生成的图片', imageUrl);
+            if (shared) {
+                showToast('图片已分享', 'success');
+                return;
+            }
+        } catch (e) {
+            console.warn('[Image] 分享失败，尝试下载:', e);
+        }
     }
+
+    // Web/Electron使用下载
+    const link = document.createElement('a');
+    link.href = imageUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('图片已下载', 'success');
 }
 
 /**
@@ -4040,7 +4126,7 @@ function copyCodeBlock(codeId) {
  * @param {string} codeId - 代码块元素ID
  * @param {string} lang - 代码语言
  */
-function downloadCodeBlock(codeId, lang) {
+async function downloadCodeBlock(codeId, lang) {
     const codeElement = document.getElementById(codeId);
     if (!codeElement) return;
 
@@ -4059,6 +4145,20 @@ function downloadCodeBlock(codeId, lang) {
     const ext = extensions[lang.toLowerCase()] || '.txt';
     const filename = `code${ext}`;
 
+    // 移动端使用分享功能
+    if (window.isMobileApp && window.MobileAPI) {
+        try {
+            const shared = await window.MobileAPI.shareContent(filename, code);
+            if (shared) {
+                showToast('代码已分享', 'success');
+                return;
+            }
+        } catch (e) {
+            console.warn('[Code] 分享失败:', e);
+        }
+    }
+
+    // Web/Electron使用下载
     const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -4466,6 +4566,65 @@ function renderTable(html) {
  * @param {string} reasoningContent - DeepSeek 模型的思维链内容
  * @returns {string} HTML 字符串
  */
+/**
+ * 切换深度思考区域的展开/收缩（带动态高度动画）
+ */
+function toggleThinking(el) {
+    const body = el.querySelector('.thinking-body');
+    if (!body) return;
+    const messageEl = el.closest('.message');
+    const messageIndex = messageEl ? parseInt(messageEl.dataset.index, 10) : NaN;
+    const key = Number.isNaN(messageIndex) ? null : getThinkingBlockKey(messageIndex);
+    if (el.classList.contains('expanded')) {
+        // 收缩：从当前实际高度过渡到0
+        body.style.maxHeight = body.scrollHeight + 'px';
+        body.offsetHeight; // 强制重排
+        body.style.maxHeight = '0';
+        el.classList.remove('expanded');
+        if (key) AppState.collapsedThinkingBlocks.add(key);
+    } else {
+        // 展开：从0过渡到实际高度
+        el.classList.add('expanded');
+        if (key) AppState.collapsedThinkingBlocks.delete(key);
+        body.style.maxHeight = body.scrollHeight + 'px';
+    }
+}
+
+/**
+ * 初始化已展开的思考块的内联 maxHeight（确保动画正常工作）
+ */
+function initThinkingHeights() {
+    document.querySelectorAll('.thinking-content.expanded .thinking-body').forEach(body => {
+        body.style.maxHeight = body.scrollHeight + 'px';
+    });
+}
+
+function getThinkingBlockKey(index, chatId = AppState.currentChatId) {
+    return `${chatId || 'current'}:${index}`;
+}
+
+function isThinkingBlockCollapsed(index, chatId = AppState.currentChatId) {
+    return AppState.collapsedThinkingBlocks.has(getThinkingBlockKey(index, chatId));
+}
+
+function markThinkingBlocksCollapsed(beforeIndex = AppState.messages.length, chatId = AppState.currentChatId) {
+    AppState.messages.forEach((msg, index) => {
+        if (index < beforeIndex && msg.reasoning_content) {
+            AppState.collapsedThinkingBlocks.add(getThinkingBlockKey(index, chatId));
+        }
+    });
+}
+
+function collapseAllThinkingBlocks() {
+    document.querySelectorAll('.thinking-content.expanded').forEach(el => {
+        const body = el.querySelector('.thinking-body');
+        if (body) {
+            body.style.maxHeight = '0';
+        }
+        el.classList.remove('expanded');
+    });
+}
+
 function renderThinkingBlock(reasoningContent, duration, expanded = false) {
     if (!reasoningContent) return '';
     // 清理多余空行，保留段落间的单个换行
@@ -4473,7 +4632,7 @@ function renderThinkingBlock(reasoningContent, duration, expanded = false) {
     const durationText = duration ? ` (用时${duration}秒)` : '';
     const expandedClass = expanded ? ' expanded' : '';
     return `
-        <div class="thinking-content${expandedClass}" onclick="this.classList.toggle('expanded')">
+        <div class="thinking-content${expandedClass}" onclick="toggleThinking(this)">
             <div class="thinking-header">
                 <div class="thinking-header-left">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4674,7 +4833,9 @@ function loadChat(chatId) {
         // 加载已有对话，不是新对话
         AppState.isNewChat = false;
 
+        markThinkingBlocksCollapsed(AppState.messages.length, chatId);
         renderChatMessages();
+        collapseAllThinkingBlocks();
         renderHistoryList();
         updateContextInfo();
 
@@ -5400,6 +5561,14 @@ function removeImage() {
  */
 function openModal(modalId) {
     document.getElementById(modalId).classList.add('active');
+    // ESC 键关闭模态框
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            closeModal(modalId);
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
 }
 
 /**
@@ -6049,6 +6218,113 @@ function initCanvasEvents() {
         }
     });
 
+    // 触摸开始
+    canvas.addEventListener('touchstart', (e) => {
+        if (editorReadOnly || editorStructureLocked) return;
+        if (e.touches.length !== 1) return;
+
+        const touch = e.touches[0];
+        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+
+        // 检查是否点击端口
+        const port = target?.closest('.node-port');
+        if (port) {
+            const nodeIndex = parseInt(port.dataset.node);
+            const portType = port.dataset.port;
+            if (portType === 'out') {
+                const step = editorWorkflow.steps[nodeIndex];
+                const pos = step.position;
+                const canvasRect = canvas.getBoundingClientRect();
+                drawingConnection = {
+                    fromIndex: nodeIndex,
+                    startX: pos.x + 160,
+                    startY: pos.y + 60,
+                    endX: touch.clientX - canvasRect.left + canvas.scrollLeft,
+                    endY: touch.clientY - canvasRect.top + canvas.scrollTop
+                };
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // 检查是否拖拽节点
+        const dragHandle = target?.closest('[data-drag-handle]');
+        if (dragHandle) {
+            const index = parseInt(dragHandle.dataset.dragHandle);
+            const node = editorWorkflow.steps[index];
+            const canvasRect = canvas.getBoundingClientRect();
+            draggingNode = {
+                index,
+                offsetX: touch.clientX - canvasRect.left + canvas.scrollLeft - (node.position?.x || 0),
+                offsetY: touch.clientY - canvasRect.top + canvas.scrollTop - (node.position?.y || 0)
+            };
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    // 触摸移动
+    canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        const canvasRect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - canvasRect.left + canvas.scrollLeft;
+        const touchY = touch.clientY - canvasRect.top + canvas.scrollTop;
+
+        if (drawingConnection) {
+            drawingConnection.endX = touchX;
+            drawingConnection.endY = touchY;
+            renderConnections();
+            e.preventDefault();
+            return;
+        }
+
+        if (draggingNode) {
+            const node = editorWorkflow.steps[draggingNode.index];
+            if (node) {
+                node.position = {
+                    x: Math.max(0, touchX - draggingNode.offsetX),
+                    y: Math.max(0, touchY - draggingNode.offsetY)
+                };
+                const nodeEl = document.querySelector(`.workflow-node[data-node-index="${draggingNode.index}"]`);
+                if (nodeEl) {
+                    nodeEl.style.left = node.position.x + 'px';
+                    nodeEl.style.top = node.position.y + 'px';
+                }
+                renderConnections();
+            }
+            e.preventDefault();
+            return;
+        }
+    }, { passive: false });
+
+    // 触摸结束
+    canvas.addEventListener('touchend', (e) => {
+        if (drawingConnection) {
+            const touch = e.changedTouches[0];
+            const target = document.elementFromPoint(touch.clientX, touch.clientY);
+            const targetNode = target?.closest('.workflow-node');
+            if (targetNode) {
+                const toIndex = parseInt(targetNode.dataset.nodeIndex);
+                if (toIndex !== drawingConnection.fromIndex) {
+                    const exists = editorWorkflow.connections.some(
+                        c => c.from === drawingConnection.fromIndex && c.to === toIndex
+                    );
+                    if (!exists) {
+                        editorWorkflow.connections.push({ from: drawingConnection.fromIndex, to: toIndex });
+                    }
+                }
+            }
+            drawingConnection = null;
+            renderConnections();
+            return;
+        }
+
+        if (draggingNode) {
+            draggingNode = null;
+            return;
+        }
+    });
+
     // 点击事件处理
     canvas.addEventListener('click', (e) => {
         // 点击连线（SVG path）
@@ -6130,6 +6406,16 @@ function renderNodeConfig(index) {
 
     configPanel.style.display = '';
     const st = WORKFLOW_STEP_TYPES[step.stepType];
+    if (!st) {
+        configContent.innerHTML = '<div style="color:var(--danger-color); padding:12px;">未知步骤类型: ' + (step.stepType || '空') + '</div>';
+        return;
+    }
+
+    // 确保 config 存在
+    if (!step.config) {
+        step.config = JSON.parse(JSON.stringify(st.defaultConfig || {}));
+    }
+
     const ro = editorReadOnly ? 'disabled' : '';
 
     configContent.innerHTML = `
@@ -6496,7 +6782,7 @@ JSON：`;
                 { role: 'system', content: '你是一个用户画像分析专家。根据用户的消息推断其身份、兴趣、风格和水平。只输出JSON，不要其他内容。' },
                 { role: 'user', content: prompt }
             ],
-            max_tokens: 200,
+            max_tokens: 500,
             temperature: 0.3,
             stream: false
         };
@@ -6516,6 +6802,7 @@ JSON：`;
         // 解析JSON
         try {
             const profileData = parseUserProfileJson(result);
+            if (!profileData) return;
 
             AppState.userProfile = mergeUserProfileWithEvidence(
                 ensureUserProfileShape(),
@@ -6719,12 +7006,21 @@ async function deleteConversationMemoryItem(chatId) {
  * 清空所有记忆
  */
 async function clearAllMemoryItems() {
-    const confirmed = await showConfirm('确定清空所有记忆吗？');
+    const confirmed = await showConfirm('确定清空所有记忆吗？清空后将同时清除长期记忆、语义记忆和用户画像。');
     if (!confirmed) return;
+    // 清空长期记忆
     ensureLongTermMemoryShape({ shared: { content: '', updatedAt: null }, conversations: {}, records: [] });
     saveLongTermMemory();
+    // 清空语义记忆
+    if (typeof memoryManager !== 'undefined') {
+        memoryManager.clearAll();
+    }
+    // 清空用户画像
+    AppState.userProfile = { name: '', role: '', interests: [], style: '', level: '', topics: {}, evidence: {}, lastUpdated: null };
+    saveUserProfileToStorage();
     renderMemoryList();
-    showToast('全部记忆已清空', 'success');
+    renderUserProfile();
+    showToast('全部记忆和画像已清空', 'success');
 }
 
 /**
@@ -6959,10 +7255,18 @@ function showToast(message, type = 'info') {
         existingToast.remove();
     }
 
+    // 类型图标映射
+    const icons = {
+        success: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+        error: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+        warning: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+        info: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
+    };
+
     // 创建新Toast
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.textContent = message;
+    toast.innerHTML = `${icons[type] || icons.info}<span>${message}</span>`;
     document.body.appendChild(toast);
 
     // 显示动画
@@ -7017,6 +7321,251 @@ function formatDate(timestamp) {
         month: 'numeric',
         day: 'numeric'
     });
+}
+
+// ===== 全局错误处理 =====
+window.onerror = function(msg, url, line, col, error) {
+    console.error('[GlobalError]', msg, url, line, col, error);
+    if (window.showToast) {
+        showToast('应用出现错误，请刷新页面重试', 'error');
+    }
+    return false;
+};
+
+window.addEventListener('unhandledrejection', function(e) {
+    console.error('[UnhandledRejection]', e.reason);
+    e.preventDefault();
+});
+
+// ===== 移动端长按上下文菜单系统 =====
+const ContextMenu = {
+    _menu: null,
+    _longPressTimer: null,
+    _longPressDelay: 500,
+    _touchStartPos: null,
+
+    init() {
+        // 创建菜单容器
+        this._menu = document.createElement('div');
+        this._menu.className = 'context-menu';
+        document.body.appendChild(this._menu);
+
+        // 点击外部关闭
+        document.addEventListener('click', () => this.hide());
+        document.addEventListener('touchstart', (e) => {
+            if (!this._menu.contains(e.target)) this.hide();
+        });
+
+        // 在消息容器上绑定长按事件
+        const chatMessages = document.getElementById('chatMessages');
+        if (chatMessages) {
+            chatMessages.addEventListener('touchstart', (e) => this._onTouchStart(e), { passive: false });
+            chatMessages.addEventListener('touchmove', (e) => this._onTouchMove(e), { passive: false });
+            chatMessages.addEventListener('touchend', () => this._onTouchEnd());
+            chatMessages.addEventListener('touchcancel', () => this._onTouchEnd());
+        }
+    },
+
+    _onTouchStart(e) {
+        if (e.touches.length !== 1) return;
+        const msgEl = e.target.closest('.message');
+        if (!msgEl) return;
+
+        this._touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        const msgIndex = parseInt(msgEl.dataset.index);
+
+        this._longPressTimer = setTimeout(() => {
+            this.show(e.touches[0].clientX, e.touches[0].clientY, msgIndex);
+        }, this._longPressDelay);
+    },
+
+    _onTouchMove(e) {
+        if (!this._touchStartPos || !this._longPressTimer) return;
+        const dx = Math.abs(e.touches[0].clientX - this._touchStartPos.x);
+        const dy = Math.abs(e.touches[0].clientY - this._touchStartPos.y);
+        if (dx > 10 || dy > 10) {
+            clearTimeout(this._longPressTimer);
+            this._longPressTimer = null;
+        }
+    },
+
+    _onTouchEnd() {
+        clearTimeout(this._longPressTimer);
+        this._longPressTimer = null;
+        this._touchStartPos = null;
+    },
+
+    show(x, y, msgIndex) {
+        const msg = AppState.messages[msgIndex];
+        if (!msg) return;
+
+        // 触觉反馈
+        if (window.isMobileApp && window.MobileAPI) {
+            window.MobileAPI.vibrate(15);
+        }
+
+        let items = '';
+        if (msg.role === 'user' || (msg.role === 'assistant' && msg.content)) {
+            items += `<button class="context-menu-item" onclick="ContextMenu._copyMessage(${msgIndex})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                复制
+            </button>`;
+        }
+
+        if (typeof window.MobileAPI !== 'undefined' && window.MobileAPI.shareContent) {
+            items += `<button class="context-menu-item" onclick="ContextMenu._shareMessage(${msgIndex})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                分享
+            </button>`;
+        }
+
+        items += `<button class="context-menu-item danger" onclick="ContextMenu._deleteMessage(${msgIndex})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            删除
+        </button>`;
+
+        this._menu.innerHTML = items;
+
+        // 定位菜单
+        const menuWidth = 170;
+        const menuHeight = 140;
+        let posX = x;
+        let posY = y;
+
+        if (posX + menuWidth > window.innerWidth) posX = window.innerWidth - menuWidth - 10;
+        if (posY + menuHeight > window.innerHeight) posY = window.innerHeight - menuHeight - 10;
+        if (posX < 10) posX = 10;
+        if (posY < 10) posY = 10;
+
+        this._menu.style.left = posX + 'px';
+        this._menu.style.top = posY + 'px';
+        this._menu.classList.add('active');
+    },
+
+    hide() {
+        if (this._menu) this._menu.classList.remove('active');
+    },
+
+    _copyMessage(index) {
+        this.hide();
+        const msg = AppState.messages[index];
+        if (!msg) return;
+        let text = '';
+        if (Array.isArray(msg.content)) {
+            const textPart = msg.content.find(c => c.type === 'text');
+            text = textPart ? textPart.text : '';
+        } else {
+            text = msg.content || '';
+        }
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('已复制到剪贴板', 'success');
+        }).catch(() => {
+            showToast('复制失败', 'error');
+        });
+    },
+
+    _shareMessage(index) {
+        this.hide();
+        const msg = AppState.messages[index];
+        if (!msg) return;
+        let text = '';
+        if (Array.isArray(msg.content)) {
+            const textPart = msg.content.find(c => c.type === 'text');
+            text = textPart ? textPart.text : '';
+        } else {
+            text = msg.content || '';
+        }
+        if (window.MobileAPI) {
+            window.MobileAPI.shareContent('AI对话', text);
+        }
+    },
+
+    _deleteMessage(index) {
+        this.hide();
+        deleteMessage(index);
+    }
+};
+
+// ===== 移动端侧边栏滑动手势 =====
+const SidebarGesture = {
+    _startX: 0,
+    _startY: 0,
+    _isDragging: false,
+
+    init() {
+        const chatContainer = document.getElementById('chatContainer');
+        if (!chatContainer) return;
+
+        chatContainer.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            this._startX = e.touches[0].clientX;
+            this._startY = e.touches[0].clientY;
+            this._isDragging = false;
+        }, { passive: true });
+
+        chatContainer.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 1) return;
+            const dx = e.touches[0].clientX - this._startX;
+            const dy = Math.abs(e.touches[0].clientY - this._startY);
+
+            // 水平滑动距离大于50px且垂直距离小于30px时触发
+            if (Math.abs(dx) > 50 && dy < 30) {
+                this._isDragging = true;
+            }
+        }, { passive: true });
+
+        chatContainer.addEventListener('touchend', () => {
+            if (!this._isDragging) return;
+            this._isDragging = false;
+
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.querySelector('.sidebar-overlay');
+            if (!sidebar) return;
+
+            // 从左边缘向右滑：打开侧边栏
+            if (this._startX < 30 && !sidebar.classList.contains('active')) {
+                sidebar.classList.add('active');
+                if (overlay) overlay.classList.add('active');
+            }
+            // 从右向左滑：关闭侧边栏
+            else if (this._startX > 30 && sidebar.classList.contains('active')) {
+                sidebar.classList.remove('active');
+                if (overlay) overlay.classList.remove('active');
+            }
+        });
+    }
+};
+
+// ===== saveChatHistory 防抖 =====
+let _saveChatHistoryTimer = null;
+const _originalSaveChatHistory = saveChatHistory;
+saveChatHistory = function() {
+    clearTimeout(_saveChatHistoryTimer);
+    _saveChatHistoryTimer = setTimeout(() => {
+        _originalSaveChatHistory();
+    }, 300);
+};
+
+// ===== 缓存最后一个assistant消息元素 =====
+let _lastAssistantMsgEl = null;
+let _lastAssistantMsgIndex = -1;
+
+function getCachedLastAssistantMsg() {
+    if (_lastAssistantMsgIndex >= 0 && _lastAssistantMsgEl && _lastAssistantMsgEl.parentNode) {
+        return _lastAssistantMsgEl;
+    }
+    const msgs = DOM.chatMessages.querySelectorAll('.message.assistant');
+    if (msgs.length > 0) {
+        _lastAssistantMsgEl = msgs[msgs.length - 1];
+        _lastAssistantMsgIndex = msgs.length - 1;
+        return _lastAssistantMsgEl;
+    }
+    return null;
+}
+
+function invalidateAssistantMsgCache() {
+    _lastAssistantMsgEl = null;
+    _lastAssistantMsgIndex = -1;
 }
 
 // 初始化应用

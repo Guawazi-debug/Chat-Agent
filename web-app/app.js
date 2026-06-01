@@ -366,7 +366,8 @@ const AppState = {
         value: '??'
     },
     selectMode: false,
-    selectedChats: new Set()
+    selectedChats: new Set(),
+    collapsedThinkingBlocks: new Set()
 };
 
 function collectGeneratedImageIds(chatHistory) {
@@ -1011,9 +1012,21 @@ function extractJsonObjectText(text) {
 }
 
 function parseUserProfileJson(text) {
-    const jsonText = extractJsonObjectText(text)
+    let jsonText = extractJsonObjectText(text)
         .replace(/,\s*([}\]])/g, '$1');
-    const parsed = JSON.parse(jsonText);
+    let parsed;
+    try {
+        parsed = JSON.parse(jsonText);
+    } catch (e) {
+        // JSON 可能被截断，尝试修复不完整的字符串
+        const repaired = jsonText.replace(/"([^"]*?)(\s*$)/, '"$1"');
+        try {
+            parsed = JSON.parse(repaired);
+        } catch (e2) {
+            console.warn('[Profile] JSON 解析失败，跳过画像更新:', e2.message);
+            return null;
+        }
+    }
     return {
         name: typeof parsed.name === 'string' ? parsed.name.trim() : '',
         role: typeof parsed.role === 'string' ? parsed.role.trim() : '',
@@ -1454,13 +1467,20 @@ function showConfirm(message) {
             resolve(false);
         };
 
+        const handleKeydown = (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); handleOk(); }
+            if (e.key === 'Escape') { e.preventDefault(); handleCancel(); }
+        };
+
         const cleanup = () => {
             DOM.confirmOkBtn.removeEventListener('click', handleOk);
             DOM.confirmCancelBtn.removeEventListener('click', handleCancel);
+            document.removeEventListener('keydown', handleKeydown);
         };
 
         DOM.confirmOkBtn.addEventListener('click', handleOk);
         DOM.confirmCancelBtn.addEventListener('click', handleCancel);
+        document.addEventListener('keydown', handleKeydown);
     });
 }
 
@@ -1922,6 +1942,8 @@ async function handleSendMessage() {
     }
 
     // 添加用户消息
+    const previousMessageCount = AppState.messages.length;
+    markThinkingBlocksCollapsed(previousMessageCount, chatId);
     const userMessage = {
         role: 'user',
         content: messageContent,
@@ -1969,11 +1991,19 @@ async function handleSendMessage() {
     // 确保滚动到底部
     scrollToBottom();
 
-    // 执行工作流（传递保存的图片数据）
-    await executeWorkflow(content, hasImage, AppState.currentChatId, imageDataForWorkflow);
+    try {
+        // 执行工作流（传递保存的图片数据）
+        await executeWorkflow(content, hasImage, chatId, imageDataForWorkflow);
 
-    // 工作流执行完成后，提取并保存记忆
-    await checkAndSummarizeContext();
+        // 工作流执行完成后，提取并保存记忆
+        await checkAndSummarizeContext();
+    } catch (error) {
+        console.error('[Send] 消息处理失败:', error);
+        showToast(`消息处理失败：${error.message || '未知错误'}`, 'error');
+    } finally {
+        AppState.generatingChats.delete(chatId);
+        updateSendButton();
+    }
 }
 
 /**
@@ -2214,7 +2244,17 @@ async function executeImageStep(stepConfig, workflowState, context) {
 async function executeSearchStep(stepConfig, workflowState, context) {
     const searchConfig = { ...WORKFLOW_MODELS.webSearch, model: stepConfig.model, maxTokens: stepConfig.maxTokens, limit: stepConfig.limit, maxKeyword: stepConfig.maxKeyword };
     try {
-        const keywords = workflowState.results.intent?.keywords || [];
+        let keywords = workflowState.results.intent?.keywords || [];
+        // 如果意图识别失败导致关键词为空，使用用户原始输入作为搜索词
+        if (keywords.length === 0 && context.userInput) {
+            keywords = [context.userInput.slice(0, 50)];
+        }
+        if (keywords.length === 0) {
+            console.log('[Workflow] 搜索关键词为空，跳过搜索');
+            workflowState.results.searchResults = null;
+            workflowState.results.searchLinks = [];
+            return;
+        }
         const searchData = await searchWithMiMoPro(keywords, searchConfig);
         workflowState.results.searchResults = searchData.content;
         workflowState.results.searchLinks = searchData.searchResults;
@@ -2232,7 +2272,10 @@ async function executeGenerateStep(stepConfig, workflowState, context) {
     try {
         const imagePrompt = workflowState.results.intent?.imagePrompt || context.userInput;
         console.log('[Workflow] 图片生成提示词:', imagePrompt);
-        const result = await generateImageWithGPT(imagePrompt, context.chatId);
+        const result = await generateImageWithGPT(imagePrompt, context.chatId, {
+            size: stepConfig.size,
+            quality: stepConfig.quality
+        });
         workflowState.results.generatedImage = result;
     } catch (error) {
         console.error('[Workflow] 图片生成失败:', error);
@@ -2480,7 +2523,7 @@ async function searchWithMiMoPro(keywords, searchConfig = WORKFLOW_MODELS.webSea
  * @param {string} chatId - 对话ID
  * @returns {Promise<string>} 生成的图片base64数据
  */
-async function generateImageWithGPT(prompt, chatId) {
+async function generateImageWithGPT(prompt, chatId, stepConfig = {}) {
     const config = AppState.apiConfig.image;
 
     if (!config?.apiKey) {
@@ -2491,8 +2534,8 @@ async function generateImageWithGPT(prompt, chatId) {
         model: WORKFLOW_MODELS.generate?.model || 'gpt-image-2',
         prompt: prompt,
         n: 1,
-        size: WORKFLOW_MODELS.generate?.size || '1792x1024',
-        quality: WORKFLOW_MODELS.generate?.quality || 'hd',
+        size: stepConfig.size || WORKFLOW_MODELS.generate?.size || '1792x1024',
+        quality: stepConfig.quality || WORKFLOW_MODELS.generate?.quality || 'hd',
         response_format: 'b64_json'
     };
 
@@ -2992,11 +3035,6 @@ async function streamResponse(requestBody, config, chatId, searchLinks = []) {
             } else {
                 chatMessages[chatMessages.length - 1].reasoning_content = searchSection;
             }
-
-            // 同时追加到正文，确保用户在普通视图下也能看到参考来源
-            const lastMsg = chatMessages[chatMessages.length - 1];
-            const linksDisplay = '\n\n---\n**参考来源：**\n' + linksInfo;
-            lastMsg.content = (lastMsg.content || '') + linksDisplay;
         }
 
         // 生成话题建议（调用API）
@@ -3088,7 +3126,7 @@ function updateWorkflowUI(step, status, chatId) {
 
     if (displayStep === 'start') {
         stepEl.innerHTML = `
-            <span class="step-icon">🔄</span>
+            <span class="step-icon spinning">🔄</span>
             <span class="step-text">准备中...</span>
         `;
         modelEl.textContent = '';
@@ -3102,7 +3140,8 @@ function updateWorkflowUI(step, status, chatId) {
             statusEl.style.display = 'none';
         }, 3000);
     } else {
-        const icon = displayStatus === 'running' ? '🔄' : displayStatus === 'done' ? '✅' : '⏭️';
+        const isRunning = displayStatus === 'running';
+        const icon = isRunning ? '🔄' : displayStatus === 'done' ? '✅' : '⏭️';
         const statusText = displayStatus === 'skipped'
             ? `已跳过：${stepTypeName}`
             : displayStatus === 'done'
@@ -3110,7 +3149,7 @@ function updateWorkflowUI(step, status, chatId) {
                 : `正在${stepTypeName}...`;
 
         stepEl.innerHTML = `
-            <span class="step-icon">${icon}</span>
+            <span class="step-icon${isRunning ? ' spinning' : ''}">${icon}</span>
             <span class="step-text">${statusText}</span>
         `;
 
@@ -3497,7 +3536,7 @@ function renderChatMessages() {
                 : msg.content;
             // 如果有思考内容，先渲染思考区域（始终展开）
             if (msg.reasoning_content) {
-                content = renderThinkingBlock(msg.reasoning_content, msg.thinkingDuration, true);
+                content = renderThinkingBlock(msg.reasoning_content, msg.thinkingDuration, !isThinkingBlockCollapsed(index));
             }
             // 如果有生成的图片，渲染图片和下载按钮
             const genImage = msg.generatedImage || (msg.imageId ? ImageStore.getSync(msg.imageId) : null);
@@ -3559,6 +3598,7 @@ function renderChatMessages() {
 
     // 滚动到底部
     scrollToBottom();
+    initThinkingHeights();
 }
 
 /**
@@ -3622,7 +3662,7 @@ function updateLastMessageContent(messages) {
     } else {
         if (lastMsg.reasoning_content) {
             // 深度思考内容始终展开
-            html = renderThinkingBlock(lastMsg.reasoning_content, lastMsg.thinkingDuration, true);
+            html = renderThinkingBlock(lastMsg.reasoning_content, lastMsg.thinkingDuration, !isThinkingBlockCollapsed(messages.length - 1));
         }
         // 只渲染有效的文本内容，不渲染loading占位文本
         const validText = textContent === '内容正在生成中' ? '' : textContent;
@@ -3671,6 +3711,8 @@ function updateLastMessageContent(messages) {
             messageBody.appendChild(suggestionsEl);
         }
     }
+
+    initThinkingHeights();
 }
 
 /**
@@ -4466,6 +4508,62 @@ function renderTable(html) {
  * @param {string} reasoningContent - DeepSeek 模型的思维链内容
  * @returns {string} HTML 字符串
  */
+/**
+ * 切换深度思考区域的展开/收缩（带动态高度动画）
+ */
+function toggleThinking(el) {
+    const body = el.querySelector('.thinking-body');
+    if (!body) return;
+    const messageEl = el.closest('.message');
+    const messageIndex = messageEl ? parseInt(messageEl.dataset.index, 10) : NaN;
+    const key = Number.isNaN(messageIndex) ? null : getThinkingBlockKey(messageIndex);
+    if (el.classList.contains('expanded')) {
+        // 收缩：先设为实际高度，强制重排，再设为0触发过渡
+        body.style.maxHeight = body.scrollHeight + 'px';
+        body.offsetHeight; // 强制重排，让浏览器记录当前高度
+        body.style.maxHeight = '0';
+        el.classList.remove('expanded');
+        if (key) AppState.collapsedThinkingBlocks.add(key);
+    } else {
+        // 展开：设为内容实际高度
+        el.classList.add('expanded');
+        if (key) AppState.collapsedThinkingBlocks.delete(key);
+        body.style.maxHeight = body.scrollHeight + 'px';
+    }
+}
+
+function initThinkingHeights() {
+    document.querySelectorAll('.thinking-content.expanded .thinking-body').forEach(body => {
+        body.style.maxHeight = body.scrollHeight + 'px';
+    });
+}
+
+function getThinkingBlockKey(index, chatId = AppState.currentChatId) {
+    return `${chatId || 'current'}:${index}`;
+}
+
+function isThinkingBlockCollapsed(index, chatId = AppState.currentChatId) {
+    return AppState.collapsedThinkingBlocks.has(getThinkingBlockKey(index, chatId));
+}
+
+function markThinkingBlocksCollapsed(beforeIndex = AppState.messages.length, chatId = AppState.currentChatId) {
+    AppState.messages.forEach((msg, index) => {
+        if (index < beforeIndex && msg.reasoning_content) {
+            AppState.collapsedThinkingBlocks.add(getThinkingBlockKey(index, chatId));
+        }
+    });
+}
+
+function collapseAllThinkingBlocks() {
+    document.querySelectorAll('.thinking-content.expanded').forEach(el => {
+        const body = el.querySelector('.thinking-body');
+        if (body) {
+            body.style.maxHeight = '0';
+        }
+        el.classList.remove('expanded');
+    });
+}
+
 function renderThinkingBlock(reasoningContent, duration, expanded = false) {
     if (!reasoningContent) return '';
     // 清理多余空行，保留段落间的单个换行
@@ -4473,7 +4571,7 @@ function renderThinkingBlock(reasoningContent, duration, expanded = false) {
     const durationText = duration ? ` (用时${duration}秒)` : '';
     const expandedClass = expanded ? ' expanded' : '';
     return `
-        <div class="thinking-content${expandedClass}" onclick="this.classList.toggle('expanded')">
+        <div class="thinking-content${expandedClass}" onclick="toggleThinking(this)">
             <div class="thinking-header">
                 <div class="thinking-header-left">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4674,7 +4772,9 @@ function loadChat(chatId) {
         // 加载已有对话，不是新对话
         AppState.isNewChat = false;
 
+        markThinkingBlocksCollapsed(AppState.messages.length, chatId);
         renderChatMessages();
+        collapseAllThinkingBlocks();
         renderHistoryList();
         updateContextInfo();
 
@@ -5400,6 +5500,14 @@ function removeImage() {
  */
 function openModal(modalId) {
     document.getElementById(modalId).classList.add('active');
+    // ESC 键关闭模态框
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            closeModal(modalId);
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
 }
 
 /**
@@ -6496,7 +6604,7 @@ JSON：`;
                 { role: 'system', content: '你是一个用户画像分析专家。根据用户的消息推断其身份、兴趣、风格和水平。只输出JSON，不要其他内容。' },
                 { role: 'user', content: prompt }
             ],
-            max_tokens: 200,
+            max_tokens: 500,
             temperature: 0.3,
             stream: false
         };
@@ -6516,6 +6624,7 @@ JSON：`;
         // 解析JSON
         try {
             const profileData = parseUserProfileJson(result);
+            if (!profileData) return;
 
             AppState.userProfile = mergeUserProfileWithEvidence(
                 ensureUserProfileShape(),
@@ -6719,12 +6828,21 @@ async function deleteConversationMemoryItem(chatId) {
  * 清空所有记忆
  */
 async function clearAllMemoryItems() {
-    const confirmed = await showConfirm('确定清空所有记忆吗？');
+    const confirmed = await showConfirm('确定清空所有记忆吗？清空后将同时清除长期记忆、语义记忆和用户画像。');
     if (!confirmed) return;
+    // 清空长期记忆
     ensureLongTermMemoryShape({ shared: { content: '', updatedAt: null }, conversations: {}, records: [] });
     saveLongTermMemory();
+    // 清空语义记忆
+    if (typeof memoryManager !== 'undefined') {
+        memoryManager.clearAll();
+    }
+    // 清空用户画像
+    AppState.userProfile = { name: '', role: '', interests: [], style: '', level: '', topics: {}, evidence: {}, lastUpdated: null };
+    saveUserProfileToStorage();
     renderMemoryList();
-    showToast('全部记忆已清空', 'success');
+    renderUserProfile();
+    showToast('全部记忆和画像已清空', 'success');
 }
 
 /**
@@ -6959,10 +7077,18 @@ function showToast(message, type = 'info') {
         existingToast.remove();
     }
 
+    // 类型图标映射
+    const icons = {
+        success: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+        error: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+        warning: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+        info: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
+    };
+
     // 创建新Toast
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.textContent = message;
+    toast.innerHTML = `${icons[type] || icons.info}<span>${message}</span>`;
     document.body.appendChild(toast);
 
     // 显示动画

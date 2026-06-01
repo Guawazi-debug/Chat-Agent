@@ -2,15 +2,19 @@
 :root {
     --primary-color: #6366f1;
     --primary-hover: #4f46e5;
+    --primary-color-rgb: 99, 102, 241;
     --bg-color: #0f0f10;
     --sidebar-bg: #1a1a1e;
     --chat-bg: #141415;
+    --bg-secondary: #1a1a1e;
+    --bg-tertiary: #252528;
     --message-user-bg: #2a2a2e;
     --message-ai-bg: transparent;
     --input-bg: #1e1e22;
     --border-color: #2a2a2e;
     --text-primary: #e4e4e7;
     --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
     --danger-color: #ef4444;
     --danger-hover: #dc2626;
     --success-color: #22c55e;
@@ -146,12 +150,6 @@ body {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-primary);
-}
-
-.sidebar-header-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
 }
 
 .btn-close-sidebar {
@@ -527,9 +525,6 @@ body {
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-}
-
-.btn-save-workflow {
     background: var(--primary-color);
     color: white;
 }
@@ -2019,6 +2014,8 @@ body {
 
 .step-icon {
     font-size: 16px;
+}
+.step-icon.spinning {
     animation: spin 1s linear infinite;
 }
 
@@ -2160,12 +2157,6 @@ body {
 }
 
 /* 消息容器 */
-.message {
-    display: flex;
-    gap: 16px;
-    padding: 24px 0;
-    animation: messageFadeIn 0.3s ease;
-}
 
 /* 用户消息靠右，头像在右边 */
 .message.user {
@@ -2175,17 +2166,6 @@ body {
 /* AI消息靠左，头像在左边 */
 .message.assistant {
     flex-direction: row;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 .message-avatar {
@@ -3381,6 +3361,9 @@ body {
     z-index: 2000;
     transition: transform 0.3s ease;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .toast.show {
@@ -3389,10 +3372,17 @@ body {
 
 .toast.success {
     border-color: var(--success-color);
+    color: var(--success-color);
 }
 
 .toast.error {
     border-color: var(--danger-color);
+    color: var(--danger-color);
+}
+
+.toast.warning {
+    border-color: var(--warning-color);
+    color: var(--warning-color);
 }
 
 /* 响应式设计 */
@@ -3874,11 +3864,11 @@ body {
 .thinking-body {
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.3s ease;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .thinking-content.expanded .thinking-body {
-    max-height: 2000px;
+    max-height: 5000px;
 }
 
 .thinking-text {

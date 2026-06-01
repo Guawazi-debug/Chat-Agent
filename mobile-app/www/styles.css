@@ -2,15 +2,19 @@
 :root {
     --primary-color: #6366f1;
     --primary-hover: #4f46e5;
+    --primary-color-rgb: 99, 102, 241;
     --bg-color: #0f0f10;
     --sidebar-bg: #1a1a1e;
     --chat-bg: #141415;
+    --bg-secondary: #1a1a1e;
+    --bg-tertiary: #252528;
     --message-user-bg: #2a2a2e;
     --message-ai-bg: transparent;
     --input-bg: #1e1e22;
     --border-color: #2a2a2e;
     --text-primary: #e4e4e7;
     --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
     --danger-color: #ef4444;
     --danger-hover: #dc2626;
     --success-color: #22c55e;
@@ -146,12 +150,6 @@ body {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-primary);
-}
-
-.sidebar-header-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
 }
 
 .btn-close-sidebar {
@@ -527,9 +525,6 @@ body {
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-}
-
-.btn-save-workflow {
     background: var(--primary-color);
     color: white;
 }
@@ -2019,6 +2014,8 @@ body {
 
 .step-icon {
     font-size: 16px;
+}
+.step-icon.spinning {
     animation: spin 1s linear infinite;
 }
 
@@ -2160,12 +2157,6 @@ body {
 }
 
 /* 消息容器 */
-.message {
-    display: flex;
-    gap: 16px;
-    padding: 24px 0;
-    animation: messageFadeIn 0.3s ease;
-}
 
 /* 用户消息靠右，头像在右边 */
 .message.user {
@@ -2175,17 +2166,6 @@ body {
 /* AI消息靠左，头像在左边 */
 .message.assistant {
     flex-direction: row;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 .message-avatar {
@@ -2346,6 +2326,7 @@ body {
     max-width: 70%;
     font-size: 15px;
     position: relative;
+    overflow: hidden;
 }
 
 /* 用户消息中的段落移除margin，确保垂直居中 */
@@ -2584,13 +2565,14 @@ body {
 
 /* 用户上传的图片 */
 .message-body .user-image {
-    max-width: 300px;
+    max-width: 100%;
     max-height: 300px;
     border-radius: 8px;
     margin: 0 0 4px 0;
     cursor: pointer;
     transition: transform 0.2s;
     display: block;
+    object-fit: contain;
 }
 
 .message-body .user-image:hover {
@@ -3381,6 +3363,9 @@ body {
     z-index: 2000;
     transition: transform 0.3s ease;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .toast.show {
@@ -3389,10 +3374,17 @@ body {
 
 .toast.success {
     border-color: var(--success-color);
+    color: var(--success-color);
 }
 
 .toast.error {
     border-color: var(--danger-color);
+    color: var(--danger-color);
+}
+
+.toast.warning {
+    border-color: var(--warning-color);
+    color: var(--warning-color);
 }
 
 /* 响应式设计 */
@@ -3476,10 +3468,296 @@ body {
         height: 32px;
     }
 
+    /* 移动端图片下载按钮触摸优化 */
+    .btn-download-image {
+        opacity: 0.7;
+    }
+    .image-wrapper:hover .btn-download-image,
+    .image-wrapper:active .btn-download-image {
+        opacity: 1;
+    }
+
     /* 移动端下拉菜单左对齐 */
     .more-menu-dropdown {
         right: auto;
         left: 0;
+    }
+
+    /* 工作流编辑器移动端适配 */
+    .workflow-editor-container {
+        flex-direction: column !important;
+    }
+
+    .workflow-canvas-wrapper {
+        flex: 1 !important;
+        min-height: 50vh !important;
+    }
+
+    .workflow-canvas {
+        min-height: 50vh !important;
+        touch-action: pan-x pan-y;
+    }
+
+    /* 工作流侧边栏改为底部面板 */
+    .workflow-sidebar {
+        width: 100% !important;
+        max-height: 40vh;
+        border-left: none !important;
+        border-top: 1px solid var(--border-color);
+        overflow-y: auto;
+    }
+
+    /* 节点缩小适配移动端 */
+    .workflow-node {
+        width: 160px !important;
+    }
+
+    .node-header {
+        padding: 8px 10px !important;
+    }
+
+    .node-title {
+        font-size: 12px !important;
+    }
+
+    .node-body {
+        padding: 6px 10px !important;
+    }
+
+    .node-model {
+        font-size: 11px !important;
+    }
+
+    .node-actions {
+        flex-direction: column !important;
+        gap: 4px !important;
+    }
+
+    .btn-node-toggle,
+    .btn-node-config {
+        font-size: 11px !important;
+        padding: 4px 8px !important;
+    }
+
+    /* 编辑器元信息适配 */
+    .editor-meta-inline {
+        flex-direction: column !important;
+        gap: 8px !important;
+    }
+
+    .editor-meta-inline input {
+        width: 100% !important;
+    }
+
+    /* 节点配置面板适配 */
+    .node-config-panel {
+        padding: 12px !important;
+    }
+
+    .node-config-panel .config-row {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 4px !important;
+        margin-bottom: 10px !important;
+    }
+
+    .node-config-panel .config-row label {
+        font-size: 12px !important;
+        color: var(--text-secondary) !important;
+    }
+
+    .node-config-panel .config-row select,
+    .node-config-panel .config-row input {
+        width: 100% !important;
+        font-size: 13px !important;
+    }
+
+    /* 可用步骤面板适配 */
+    .available-steps-list {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
+    }
+
+    .available-step-item {
+        padding: 8px !important;
+        font-size: 12px !important;
+    }
+
+    /* ===== 移动端UX优化 ===== */
+
+    /* 隐藏工作流编辑/新建功能（移动端仅支持官方工作流） */
+    #createWorkflowBtn {
+        display: none !important;
+    }
+
+    .workflow-section:last-child {
+        display: none !important;
+    }
+
+    .btn-workflow-edit,
+    .btn-workflow-delete {
+        display: none !important;
+    }
+
+    .workflow-card-actions {
+        display: none !important;
+    }
+
+    /* 消息操作按钮：点击消息气泡显示，在气泡外 */
+    .message-footer {
+        opacity: 0;
+        transition: opacity 0.15s;
+        margin-top: 4px !important;
+        gap: 4px !important;
+    }
+
+    .message.show-actions .message-footer {
+        opacity: 1;
+    }
+
+    /* AI消息：按钮在气泡外左下角 */
+    .message.assistant .message-footer {
+        justify-content: flex-start !important;
+        padding-left: 0 !important;
+    }
+
+    /* 用户消息：按钮在气泡外右下角，与气泡对齐 */
+    .message.user .message-footer {
+        position: relative !important;
+        right: auto !important;
+        bottom: auto !important;
+        width: 70% !important;
+        justify-content: flex-end !important;
+        margin-top: 2px !important;
+        margin-left: auto !important;
+    }
+
+    .btn-message-action {
+        width: 24px !important;
+        height: 24px !important;
+        min-width: 24px !important;
+        min-height: 24px !important;
+        padding: 0 !important;
+    }
+
+    .btn-message-action svg {
+        width: 13px !important;
+        height: 13px !important;
+    }
+
+    /* 历史记录删除按钮：移动端默认显示 */
+    .history-item-delete {
+        opacity: 0.6 !important;
+    }
+
+    /* 主题切换图标平滑过渡 */
+    .btn-theme-toggle .icon-sun,
+    .btn-theme-toggle .icon-moon {
+        transition: opacity 0.3s, transform 0.3s;
+    }
+
+    /* 侧边栏滑动手势提示区域 */
+    .sidebar-swipe-zone {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 20px;
+        z-index: 999;
+    }
+
+    /* 长按上下文菜单 */
+    .context-menu {
+        position: fixed;
+        z-index: 2000;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        padding: 6px;
+        min-width: 160px;
+        display: none;
+    }
+
+    .context-menu.active {
+        display: block;
+        animation: fadeInUp 0.15s ease;
+    }
+
+    .context-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        color: var(--text-primary);
+        transition: background 0.15s;
+        border: none;
+        background: none;
+        width: 100%;
+        text-align: left;
+    }
+
+    .context-menu-item:active {
+        background: var(--bg-tertiary);
+    }
+
+    .context-menu-item.danger {
+        color: var(--danger-color);
+    }
+
+    .context-menu-item svg {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+    }
+
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+    }
+
+    /* Toast通知移动端优化 */
+    .toast {
+        left: 16px !important;
+        right: 16px !important;
+        width: auto !important;
+        transform: translateY(100px) !important;
+    }
+
+    .toast.show {
+        transform: translateY(0) !important;
+    }
+
+    /* 骨架屏加载动画 */
+    .skeleton {
+        background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--border-color) 50%, var(--bg-tertiary) 75%);
+        background-size: 200% 100%;
+        animation: skeleton-shimmer 1.5s infinite;
+        border-radius: 8px;
+    }
+
+    @keyframes skeleton-shimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+
+    .skeleton-line {
+        height: 14px;
+        margin-bottom: 8px;
+    }
+
+    .skeleton-line:last-child {
+        width: 60%;
+    }
+
+    .skeleton-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
     }
 }
 
@@ -3874,11 +4152,11 @@ body {
 .thinking-body {
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.3s ease;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .thinking-content.expanded .thinking-body {
-    max-height: 2000px;
+    max-height: 5000px;
 }
 
 .thinking-text {
