@@ -1,6 +1,6 @@
 {
   "name": "ai-chat-multi-target",
-  "version": "1.0.0",
+  "version": "1.6.1",
   "private": true,
   "description": "Root workspace for independently developed Web, Electron, and Capacitor AI chat clients.",
   "scripts": {

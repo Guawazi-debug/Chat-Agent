@@ -1,6 +1,6 @@
 {
   "name": "ai-chat-mobile",
-  "version": "1.0.0",
+  "version": "1.6.1",
   "description": "AI 对话系统 - 移动端 App",
   "main": "www/index.html",
   "scripts": {

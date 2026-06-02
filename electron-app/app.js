@@ -5016,7 +5016,7 @@ function exportMemory() {
         version: '1.0.0',
         exportDate: new Date().toISOString(),
         payload: {
-            memories: AppState.longTermMemory,
+            longTermMemory: AppState.longTermMemory,
             chatHistory: AppState.chatHistory
         }
     };
@@ -6663,6 +6663,18 @@ function renderMemoryList() {
     const conversationCount = Object.keys(conversations).length;
 
     countEl.textContent = conversationCount + (memory.shared?.content ? 1 : 0);
+
+    // 更新记忆统计信息
+    const currentChatId = AppState.currentChatId;
+    const currentChatMessages = currentChatId && AppState.chatHistory[currentChatId]
+        ? (AppState.chatHistory[currentChatId].messages || []).length
+        : 0;
+    const longTermMemoryCount = conversationCount + (memory.shared?.content ? 1 : 0);
+
+    const currentMessageCountEl = document.getElementById('currentMessageCount');
+    const longTermMemoryCountEl = document.getElementById('longTermMemoryCount');
+    if (currentMessageCountEl) currentMessageCountEl.textContent = currentChatMessages;
+    if (longTermMemoryCountEl) longTermMemoryCountEl.textContent = longTermMemoryCount;
 
     // 共用记忆
     const sharedHtml = memory.shared?.content
