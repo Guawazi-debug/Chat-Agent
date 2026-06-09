@@ -1,6 +1,6 @@
 {
   "name": "ai-chat-desktop",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "AI 对话系统 - 多模型集成桌面版",
   "main": "main.js",
   "scripts": {
