@@ -1525,6 +1525,9 @@ async function initApp() {
         });
     }
 
+    // 初始化图片预览功能
+    initImagePreview();
+
     console.log('AI对话系统初始化完成');
 }
 
@@ -3885,14 +3888,187 @@ function downloadGeneratedImage(index) {
 }
 
 /**
+ * 获取希腊字母映射
+ */
+function getGreekLetters() {
+    return {
+        '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ', '\\epsilon': 'ε',
+        '\\zeta': 'ζ', '\\eta': 'η', '\\theta': 'θ', '\\iota': 'ι', '\\kappa': 'κ',
+        '\\lambda': 'λ', '\\mu': 'μ', '\\nu': 'ν', '\\xi': 'ξ', '\\pi': 'π',
+        '\\rho': 'ρ', '\\sigma': 'σ', '\\tau': 'τ', '\\upsilon': 'υ', '\\phi': 'φ',
+        '\\chi': 'χ', '\\psi': 'ψ', '\\omega': 'ω',
+        '\\Alpha': 'Α', '\\Beta': 'Β', '\\Gamma': 'Γ', '\\Delta': 'Δ', '\\Epsilon': 'Ε',
+        '\\Zeta': 'Ζ', '\\Eta': 'Η', '\\Theta': 'Θ', '\\Iota': 'Ι', '\\Kappa': 'Κ',
+        '\\Lambda': 'Λ', '\\Mu': 'Μ', '\\Nu': 'Ν', '\\Xi': 'Ξ', '\\Pi': 'Π',
+        '\\Rho': 'Ρ', '\\Sigma': 'Σ', '\\Tau': 'Τ', '\\Upsilon': 'Υ', '\\Phi': 'Φ',
+        '\\Chi': 'Χ', '\\Psi': 'Ψ', '\\Omega': 'Ω'
+    };
+}
+
+/**
+ * 获取数学符号映射
+ */
+function getSymbols() {
+    return {
+        '\\pm': '±', '\\mp': '∓', '\\times': '×', '\\div': '÷', '\\cdot': '·',
+        '\\leq': '≤', '\\geq': '≥', '\\neq': '≠', '\\approx': '≈', '\\equiv': '≡',
+        '\\infty': '∞', '\\partial': '∂', '\\nabla': '∇', '\\forall': '∀', '\\exists': '∃',
+        '\\in': '∈', '\\notin': '∉', '\\subset': '⊂', '\\supset': '⊃', '\\cup': '∪',
+        '\\cap': '∩', '\\emptyset': '∅', '\\rightarrow': '→', '\\leftarrow': '←',
+        '\\Rightarrow': '⇒', '\\Leftarrow': '⇐', '\\leftrightarrow': '↔',
+        '\\sum': '∑', '\\prod': '∏', '\\int': '∫', '\\oint': '∮',
+        '\\sqrt': '√', '\\quad': ' ', '\\qquad': '  ', '\\,': ' ', '\\;': ' ',
+        '\\!': '', '\\ldots': '…', '\\cdots': '⋯', '\\vdots': '⋮', '\\ddots': '⋱'
+    };
+}
+
+/**
+ * LaTeX 数学公式渲染器
+ */
+function renderLatex(text) {
+    if (!text) return '';
+
+    const greekLetters = getGreekLetters();
+    const symbols = getSymbols();
+
+    // 处理块级公式 \[...\]
+    text = text.replace(/\\\[(.+?)\\\]/gs, (match, formula) => {
+        return `<div class="math-block">${renderLatexFormula(formula, greekLetters, symbols)}</div>`;
+    });
+
+    // 处理行内公式 \(...\)
+    text = text.replace(/\\\((.+?)\\\)/g, (match, formula) => {
+        return `<span class="math-inline">${renderLatexFormula(formula, greekLetters, symbols)}</span>`;
+    });
+
+    return text;
+}
+
+/**
+ * 渲染 LaTeX 公式内容
+ */
+function renderLatexFormula(formula, greekLetters, symbols) {
+    let result = formula;
+
+    // 辅助函数：匹配嵌套的花括号内容
+    function extractBracedContent(str, startPos) {
+        if (str[startPos] !== '{') return null;
+        let depth = 0;
+        for (let i = startPos; i < str.length; i++) {
+            if (str[i] === '{') depth++;
+            else if (str[i] === '}') {
+                depth--;
+                if (depth === 0) {
+                    return str.substring(startPos + 1, i);
+                }
+            }
+        }
+        return null;
+    }
+
+    // 处理 \frac{num}{den}（支持嵌套）
+    // 使用循环而不是 replace，因为 replace 无法获取 offset
+    let fracIndex;
+    while ((fracIndex = result.indexOf('\\frac')) !== -1) {
+        const afterFrac = result.substring(fracIndex + 5);
+        let pos = 0;
+        while (pos < afterFrac.length && afterFrac[pos] === ' ') pos++;
+        const num = extractBracedContent(afterFrac, pos);
+        if (num !== null) {
+            pos += num.length + 2;
+            while (pos < afterFrac.length && afterFrac[pos] === ' ') pos++;
+            const den = extractBracedContent(afterFrac, pos);
+            if (den !== null) {
+                const renderedNum = renderLatexFormula(num, greekLetters, symbols);
+                const renderedDen = renderLatexFormula(den, greekLetters, symbols);
+                const replacement = `<span class="math-fraction"><span class="math-num">${renderedNum}</span><span class="math-den">${renderedDen}</span></span>`;
+                result = result.substring(0, fracIndex) + replacement + result.substring(fracIndex + 5 + pos + den.length + 2);
+                continue;
+            }
+        }
+        // 如果无法解析，跳过这个 \frac
+        result = result.substring(0, fracIndex) + '\\frac' + result.substring(fracIndex + 5);
+        break;
+    }
+
+    // 处理 \sqrt{x} 和 \sqrt[n]{x}
+    result = result.replace(/\\sqrt(?:\[(\d+)\])?/g, (match, n) => {
+        return n ? `__SQRT_${n}__` : '__SQRT__';
+    });
+    result = result.replace(/__SQRT_(\d+)__\{([^{}]+)\}/g, (match, n, content) => {
+        return `<span class="math-sqrt"><span class="math-sqrt-index">${n}</span>√<span class="math-sqrt-content">${renderLatexFormula(content, greekLetters, symbols)}</span></span>`;
+    });
+    result = result.replace(/__SQRT__\{([^{}]+)\}/g, (match, content) => {
+        return `<span class="math-sqrt">√<span class="math-sqrt-content">${renderLatexFormula(content, greekLetters, symbols)}</span></span>`;
+    });
+
+    // 处理 \tan, \sin, \cos 等函数（在希腊字母之前）
+    result = result.replace(/\\(tan|sin|cos|cot|sec|csc|log|ln|exp|lim|sup|inf|max|min|gcd|det|le|ge|neq|leq|geq)\b/g, (match, func) => {
+        // 特殊符号直接替换
+        const specialSymbols = {
+            'le': '≤', 'ge': '≥', 'neq': '≠', 'leq': '≤', 'geq': '≥'
+        };
+        if (specialSymbols[func]) {
+            return `<span class="math-symbol">${specialSymbols[func]}</span>`;
+        }
+        return `<span class="math-func">${func}</span>`;
+    });
+
+    // 替换希腊字母
+    for (const [cmd, char] of Object.entries(greekLetters)) {
+        result = result.split(cmd).join(`<span class="math-symbol">${char}</span>`);
+    }
+
+    // 替换数学符号
+    for (const [cmd, char] of Object.entries(symbols)) {
+        result = result.split(cmd).join(`<span class="math-symbol">${char}</span>`);
+    }
+
+    // 处理上标 ^（支持嵌套花括号）
+    result = result.replace(/\^{([^{}]+)}/g, '<span class="math-sup">$1</span>');
+    result = result.replace(/\^(\w)/g, '<span class="math-sup">$1</span>');
+
+    // 处理下标 _（支持嵌套花括号）
+    result = result.replace(/_{([^{}]+)}/g, '<span class="math-sub">$1</span>');
+    result = result.replace(/_(\w)/g, '<span class="math-sub">$1</span>');
+
+    // 处理 \left 和 \right 括号（直接替换为普通字符，不嵌套 span）
+    result = result.replace(/\\left\(/g, '(');
+    result = result.replace(/\\right\)/g, ')');
+    result = result.replace(/\\left\[/g, '[');
+    result = result.replace(/\\right\]/g, ']');
+    result = result.replace(/\\left\\\{/g, '{');
+    result = result.replace(/\\right\\\}/g, '}');
+
+    return result;
+}
+
+/**
  * 渲染Markdown内容 - 自实现版本，不依赖外部库
  */
 function renderMarkdown(content) {
     if (!content) return '';
 
+    // 临时存储 LaTeX 公式（避免被 escapeHtml 转义）
+    const latexBlocks = [];
+    let html = content;
+
+    // 提取块级公式 \[...\]
+    html = html.replace(/\\\[(.+?)\\\]/gs, (match, formula) => {
+        const index = latexBlocks.length;
+        latexBlocks.push(renderLatexFormula(formula, getGreekLetters(), getSymbols()));
+        return `__LATEX_BLOCK_${index}__`;
+    });
+
+    // 提取行内公式 \(...\)
+    html = html.replace(/\\\((.+?)\\\)/g, (match, formula) => {
+        const index = latexBlocks.length;
+        latexBlocks.push(`<span class="math-inline">${renderLatexFormula(formula, getGreekLetters(), getSymbols())}</span>`);
+        return `__LATEX_INLINE_${index}__`;
+    });
+
     // 临时存储代码块
     const codeBlocks = [];
-    let html = content;
 
     // 先提取代码块 (```)，避免转义
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -4005,6 +4181,12 @@ function renderMarkdown(content) {
     // 恢复行内代码
     inlineCodes.forEach((code, index) => {
         html = html.replace(`__INLINE_CODE_${index}__`, `<code>${code}</code>`);
+    });
+
+    // 恢复 LaTeX 公式
+    latexBlocks.forEach((latex, index) => {
+        html = html.replace(`__LATEX_BLOCK_${index}__`, `<div class="math-block">${latex}</div>`);
+        html = html.replace(`__LATEX_INLINE_${index}__`, latex);
     });
 
     // 清理多余的空行
@@ -7154,6 +7336,184 @@ function formatDate(timestamp) {
     return date.toLocaleDateString('zh-CN', {
         month: 'numeric',
         day: 'numeric'
+    });
+}
+
+/**
+ * 图片预览功能
+ */
+function initImagePreview() {
+    const overlay = document.getElementById('imagePreviewOverlay');
+    const img = document.getElementById('imagePreviewImg');
+    const closeBtn = document.getElementById('imagePreviewClose');
+    const zoomInBtn = document.getElementById('imageZoomIn');
+    const zoomOutBtn = document.getElementById('imageZoomOut');
+    const zoomResetBtn = document.getElementById('imageZoomReset');
+    const zoomLevelEl = document.getElementById('imageZoomLevel');
+    const downloadBtn = document.getElementById('imagePreviewDownload');
+    const wrapper = document.querySelector('.image-preview-wrapper');
+
+    let currentScale = 1;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let translateX = 0;
+    let translateY = 0;
+    let currentSrc = '';
+
+    function updateTransform() {
+        img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentScale})`;
+        zoomLevelEl.textContent = Math.round(currentScale * 100) + '%';
+    }
+
+    function openPreview(src) {
+        currentSrc = src;
+        img.src = src;
+        currentScale = 1;
+        translateX = 0;
+        translateY = 0;
+        updateTransform();
+        overlay.style.display = 'flex';
+        requestAnimationFrame(() => overlay.classList.add('active'));
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closePreview() {
+        overlay.classList.remove('active');
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            img.src = '';
+            document.body.style.overflow = '';
+        }, 300);
+    }
+
+    function zoomIn() {
+        currentScale = Math.min(currentScale * 1.2, 5);
+        updateTransform();
+    }
+
+    function zoomOut() {
+        currentScale = Math.max(currentScale / 1.2, 0.5);
+        updateTransform();
+    }
+
+    function resetZoom() {
+        currentScale = 1;
+        translateX = 0;
+        translateY = 0;
+        updateTransform();
+    }
+
+    function downloadImage() {
+        if (!currentSrc) return;
+        const a = document.createElement('a');
+        a.href = currentSrc;
+        a.download = `image_${Date.now()}.png`;
+        a.click();
+    }
+
+    // 事件绑定
+    closeBtn.addEventListener('click', closePreview);
+    zoomInBtn.addEventListener('click', zoomIn);
+    zoomOutBtn.addEventListener('click', zoomOut);
+    zoomResetBtn.addEventListener('click', resetZoom);
+    downloadBtn.addEventListener('click', downloadImage);
+
+    // 点击遮罩关闭
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closePreview();
+    });
+
+    // ESC 关闭
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.style.display === 'flex') {
+            closePreview();
+        }
+    });
+
+    // 鼠标滚轮缩放
+    wrapper.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+            zoomIn();
+        } else {
+            zoomOut();
+        }
+    }, { passive: false });
+
+    // 拖拽移动
+    wrapper.addEventListener('mousedown', (e) => {
+        if (e.target === img) {
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+            img.style.cursor = 'grabbing';
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        updateTransform();
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        if (img) img.style.cursor = 'grab';
+    });
+
+    // 触摸支持
+    let lastTouchDistance = 0;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+
+    wrapper.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            isDragging = true;
+            lastTouchX = e.touches[0].clientX - translateX;
+            lastTouchY = e.touches[0].clientY - translateY;
+        } else if (e.touches.length === 2) {
+            isDragging = false;
+            lastTouchDistance = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+        }
+    }, { passive: true });
+
+    wrapper.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && isDragging) {
+            translateX = e.touches[0].clientX - lastTouchX;
+            translateY = e.touches[0].clientY - lastTouchY;
+            updateTransform();
+        } else if (e.touches.length === 2) {
+            const distance = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            if (lastTouchDistance > 0) {
+                const scale = distance / lastTouchDistance;
+                currentScale = Math.min(Math.max(currentScale * scale, 0.5), 5);
+                updateTransform();
+            }
+            lastTouchDistance = distance;
+        }
+    }, { passive: true });
+
+    wrapper.addEventListener('touchend', () => {
+        isDragging = false;
+        lastTouchDistance = 0;
+    });
+
+    // 为所有图片添加点击预览
+    document.addEventListener('click', (e) => {
+        const imgEl = e.target.closest('.generated-image, .user-image, .message-image');
+        if (imgEl && imgEl.src) {
+            e.preventDefault();
+            e.stopPropagation();
+            openPreview(imgEl.src);
+        }
     });
 }
 

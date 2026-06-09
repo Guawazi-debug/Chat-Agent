@@ -3483,6 +3483,23 @@ body {
         left: 0;
     }
 
+    /* 移动端消息气泡优化 */
+    .message.user .message-body {
+        max-width: 85%;
+        padding: 8px 12px;
+    }
+
+    /* 移动端图片限制在气泡内 */
+    .message-body .user-image {
+        max-width: 100%;
+        max-height: 200px;
+    }
+
+    .message-body .generated-image {
+        max-width: 100%;
+        max-height: 250px;
+    }
+
     /* 工作流编辑器移动端适配 */
     .workflow-editor-container {
         flex-direction: column !important;
@@ -4308,4 +4325,257 @@ body {
 
 .btn-confirm-ok:hover {
     background: var(--danger-hover, #dc2626);
+}
+
+/* 图片预览模态框 */
+.image-preview-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.image-preview-overlay.active {
+    opacity: 1;
+}
+
+.image-preview-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-preview-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 24px;
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.image-preview-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.image-preview-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 60px 20px 80px;
+    overflow: hidden;
+    cursor: grab;
+}
+
+.image-preview-wrapper:active {
+    cursor: grabbing;
+}
+
+.image-preview-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transition: transform 0.2s ease;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.image-preview-controls {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 8px 16px;
+    border-radius: 25px;
+    backdrop-filter: blur(10px);
+}
+
+.image-preview-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.image-preview-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.image-preview-btn svg {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+}
+
+.image-preview-zoom-level {
+    color: white;
+    font-size: 14px;
+    min-width: 50px;
+    text-align: center;
+}
+
+/* 移动端图片预览适配 */
+@media (max-width: 768px) {
+    .image-preview-close {
+        top: 10px;
+        right: 10px;
+        width: 36px;
+        height: 36px;
+        font-size: 20px;
+    }
+
+    .image-preview-wrapper {
+        padding: 50px 10px 70px;
+    }
+
+    .image-preview-controls {
+        bottom: 10px;
+        padding: 6px 12px;
+        gap: 8px;
+    }
+
+    .image-preview-btn {
+        width: 32px;
+        height: 32px;
+    }
+
+    .image-preview-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    .image-preview-zoom-level {
+        font-size: 12px;
+        min-width: 40px;
+    }
+}
+
+/* 数学公式样式 */
+.math-block {
+    display: block;
+    text-align: center;
+    padding: 16px 8px;
+    margin: 12px 0;
+    overflow-x: auto;
+    font-family: 'Times New Roman', 'STIX Two Math', 'Cambria Math', serif;
+    font-size: 1.2em;
+    color: var(--text-primary);
+}
+
+.math-inline {
+    font-family: 'Times New Roman', 'STIX Two Math', 'Cambria Math', serif;
+    font-style: italic;
+    padding: 0 2px;
+    color: var(--text-primary);
+}
+
+.math-fraction {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    vertical-align: middle;
+    margin: 0 4px;
+    font-style: normal;
+}
+
+.math-num {
+    border-bottom: 1.5px solid currentColor;
+    padding: 0 4px 2px;
+    line-height: 1.2;
+}
+
+.math-den {
+    padding: 2px 4px 0;
+    line-height: 1.2;
+}
+
+.math-sqrt {
+    display: inline-flex;
+    align-items: center;
+    font-style: normal;
+}
+
+.math-sqrt-content {
+    border-top: 1.5px solid currentColor;
+    padding: 0 4px;
+}
+
+.math-sqrt-index {
+    font-size: 0.7em;
+    vertical-align: super;
+    margin-right: -2px;
+}
+
+.math-sup {
+    font-size: 0.75em;
+    vertical-align: super;
+    line-height: 0;
+}
+
+.math-sub {
+    font-size: 0.75em;
+    vertical-align: sub;
+    line-height: 0;
+}
+
+.math-func {
+    font-style: normal;
+    font-family: 'Times New Roman', serif;
+    margin-right: 4px;
+}
+
+.math-symbol {
+    font-style: normal;
+}
+
+.math-bracket {
+    font-style: normal;
+    font-size: 1.1em;
+}
+
+/* 移动端数学公式适配 */
+@media (max-width: 768px) {
+    .math-block {
+        font-size: 1em;
+        padding: 12px 4px;
+    }
+
+    .math-inline {
+        font-size: 0.95em;
+    }
 }

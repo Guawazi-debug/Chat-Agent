@@ -536,6 +536,31 @@
         </div>
     </div>
 
+    <!-- 图片预览模态框 -->
+    <div class="image-preview-overlay" id="imagePreviewOverlay" style="display: none;">
+        <div class="image-preview-container">
+            <button class="image-preview-close" id="imagePreviewClose">&times;</button>
+            <div class="image-preview-wrapper">
+                <img class="image-preview-img" id="imagePreviewImg" src="" alt="预览图片">
+            </div>
+            <div class="image-preview-controls">
+                <button class="image-preview-btn" id="imageZoomOut" title="缩小">
+                    <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+                </button>
+                <span class="image-preview-zoom-level" id="imageZoomLevel">100%</span>
+                <button class="image-preview-btn" id="imageZoomIn" title="放大">
+                    <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                </button>
+                <button class="image-preview-btn" id="imageZoomReset" title="重置">
+                    <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                </button>
+                <button class="image-preview-btn" id="imagePreviewDownload" title="下载">
+                    <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="secrets.js"></script>
     <script src="config.js"></script>
     <script src="memory.js"></script>
